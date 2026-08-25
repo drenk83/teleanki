@@ -9,12 +9,24 @@ import (
 	"github.com/go-telegram/bot/models"
 )
 
-func startHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
-	if update.Message == nil {
+func (h *Bot) startHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update.Message == nil || update.Message.From == nil {
 		return
 	}
 
-	_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+	username := update.Message.From.Username
+	user, err := h.users.UpsertByTelegramID(ctx, update.Message.From.ID, username)
+	if err != nil {
+		slog.Error("Failed to upsert user", "error", err, "telegram_id", update.Message.From.ID)
+	} else {
+		slog.Info("User upserted",
+			"user_id", user.ID,
+			"telegram_id", user.TelegramID,
+			"username", user.Username,
+		)
+	}
+
+	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   config.StartMessage,
 	})
@@ -29,7 +41,7 @@ func startHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	)
 }
 
-func helpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (h *Bot) helpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update.Message == nil {
 		return
 	}

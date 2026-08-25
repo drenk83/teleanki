@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/signal"
 
+	"github.com/drenk83/teleanki/internal/config"
+	"github.com/drenk83/teleanki/internal/storage/postgres"
 	tg "github.com/drenk83/teleanki/internal/telegram"
 	"github.com/joho/godotenv"
 )
@@ -18,16 +20,25 @@ func main() {
 		slog.Info(".env file not found")
 	}
 
-	tgToken := os.Getenv("TG_TOKEN")
-	if tgToken == "" {
-		slog.Error("TG_TOKEN is not set")
+	cfg, err := config.Load()
+	if err != nil {
+		slog.Error("Failed to load config", "error", err)
 		os.Exit(1)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	b, err := tg.CreateBot(tgToken)
+	db, err := postgres.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		slog.Error("Failed to open database", "error", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	users := postgres.NewUserRepository(db)
+
+	b, err := tg.CreateBot(cfg.TGToken, users)
 	if err != nil {
 		slog.Error("Failed to create bot", "error", err)
 		os.Exit(1)
