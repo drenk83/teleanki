@@ -2,14 +2,16 @@ package storage
 
 import (
 	"context"
-	"errors"
+	"time"
 
 	"github.com/drenk83/teleanki/internal/domain"
 )
 
-var ErrNotFound = errors.New("not found")
-
 type UserRepository interface {
 	UpsertByTelegramID(ctx context.Context, telegramID int64, username string) (*domain.User, error)
 	GetByTelegramID(ctx context.Context, telegramID int64) (*domain.User, error)
+	SetDailyLimit(ctx context.Context, userID int64, limit int) (*domain.User, error)
+	AddReview(ctx context.Context, userID int64, today time.Time) (*domain.User, error)
+	LearnDeckIDs(ctx context.Context, userID int64) ([]int64, error)
+	ReplaceLearnDecks(ctx context.Context, userID int64, deckIDs []int64) error
 }

@@ -37,8 +37,11 @@ func main() {
 	defer db.Close()
 
 	users := postgres.NewUserRepository(db)
+	decks := postgres.NewDeckRepository(db)
+	cards := postgres.NewCardRepository(db)
+	reviews := postgres.NewReviewRepository(db)
 
-	b, err := tg.CreateBot(cfg.TGToken, users)
+	b, err := tg.CreateBot(cfg.TGToken, users, decks, cards, reviews)
 	if err != nil {
 		slog.Error("Failed to create bot", "error", err)
 		os.Exit(1)

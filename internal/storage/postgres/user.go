@@ -3,12 +3,15 @@ package postgres
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/drenk83/teleanki/internal/domain"
 	"github.com/drenk83/teleanki/internal/storage"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+const userCols = `id, telegram_id, username, daily_limit, reviews_today, reviews_on_date, created_at, updated_at`
 
 type UserRepository struct {
 	pool *pgxpool.Pool
@@ -25,16 +28,9 @@ VALUES ($1, $2)
 ON CONFLICT (telegram_id) DO UPDATE SET
     username = EXCLUDED.username,
     updated_at = now()
-RETURNING id, telegram_id, username, created_at, updated_at`
+RETURNING ` + userCols
 
-	var u domain.User
-	err := r.pool.QueryRow(ctx, q, telegramID, username).Scan(
-		&u.ID,
-		&u.TelegramID,
-		&u.Username,
-		&u.CreatedAt,
-		&u.UpdatedAt,
-	)
+	u, err := scanUser(r.pool.QueryRow(ctx, q, telegramID, username))
 	if err != nil {
 		return nil, err
 	}
@@ -42,19 +38,7 @@ RETURNING id, telegram_id, username, created_at, updated_at`
 }
 
 func (r *UserRepository) GetByTelegramID(ctx context.Context, telegramID int64) (*domain.User, error) {
-	const q = `
-SELECT id, telegram_id, username, created_at, updated_at
-FROM users
-WHERE telegram_id = $1`
-
-	var u domain.User
-	err := r.pool.QueryRow(ctx, q, telegramID).Scan(
-		&u.ID,
-		&u.TelegramID,
-		&u.Username,
-		&u.CreatedAt,
-		&u.UpdatedAt,
-	)
+	u, err := scanUser(r.pool.QueryRow(ctx, `SELECT `+userCols+` FROM users WHERE telegram_id = $1`, telegramID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, storage.ErrNotFound
 	}
@@ -62,4 +46,72 @@ WHERE telegram_id = $1`
 		return nil, err
 	}
 	return &u, nil
+}
+
+func (r *UserRepository) SetDailyLimit(ctx context.Context, userID int64, limit int) (*domain.User, error) {
+	u, err := scanUser(r.pool.QueryRow(ctx, `
+UPDATE users SET daily_limit = $2, updated_at = now()
+WHERE id = $1
+RETURNING `+userCols, userID, limit))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, storage.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (r *UserRepository) AddReview(ctx context.Context, userID int64, today time.Time) (*domain.User, error) {
+	day := utcDate(today)
+	u, err := scanUser(r.pool.QueryRow(ctx, `
+UPDATE users SET
+    reviews_on_date = $2,
+    reviews_today = CASE WHEN reviews_on_date = $2 THEN reviews_today + 1 ELSE 1 END,
+    updated_at = now()
+WHERE id = $1
+RETURNING `+userCols, userID, day))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, storage.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (r *UserRepository) LearnDeckIDs(ctx context.Context, userID int64) ([]int64, error) {
+	rows, err := r.pool.Query(ctx, `SELECT deck_id FROM user_learn_decks WHERE user_id = $1 ORDER BY deck_id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (r *UserRepository) ReplaceLearnDecks(ctx context.Context, userID int64, deckIDs []int64) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM user_learn_decks WHERE user_id = $1`, userID); err != nil {
+		return err
+	}
+	if len(deckIDs) > 0 {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO user_learn_decks (user_id, deck_id)
+SELECT $1, id FROM decks WHERE user_id = $1 AND id = ANY($2)`, userID, deckIDs); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }

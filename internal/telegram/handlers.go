@@ -13,63 +13,69 @@ func (h *Bot) startHandler(ctx context.Context, b *bot.Bot, update *models.Updat
 	if update.Message == nil || update.Message.From == nil {
 		return
 	}
+	h.sessions.clear(update.Message.From.ID)
+	h.send(withNoMenu(ctx), b, update.Message.Chat.ID, config.StartMessage, kb(row(btn(config.BtnOpenMenu, "menu"))))
+}
 
-	username := update.Message.From.Username
-	user, err := h.users.UpsertByTelegramID(ctx, update.Message.From.ID, username)
-	if err != nil {
-		slog.Error("Failed to upsert user", "error", err, "telegram_id", update.Message.From.ID)
-	} else {
-		slog.Info("User upserted",
-			"user_id", user.ID,
-			"telegram_id", user.TelegramID,
-			"username", user.Username,
-		)
-	}
-
-	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   config.StartMessage,
-	})
-	if err != nil {
-		slog.Error("Failed to send message", "error", err)
+func (h *Bot) menuHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update.Message == nil || update.Message.From == nil {
 		return
 	}
-	slog.Info("Send message",
-		"type_message", "start_message",
-		"user_id", update.Message.From.ID,
-		"username", update.Message.From.Username,
-	)
+	h.showMainMenu(ctx, b, update.Message.From.ID, update.Message.Chat.ID)
 }
 
 func (h *Bot) helpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
-	if update.Message == nil {
+	if update.Message == nil || update.Message.From == nil {
 		return
 	}
-
-	_, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   config.HelpMessage,
-	})
-	if err != nil {
-		slog.Error("Failed to send message", "error", err)
-		return
-	}
-	slog.Info("Send message",
-		"type_message", "help_message",
-		"user_id", update.Message.From.ID,
-		"username", update.Message.From.Username,
-	)
+	h.showHelp(ctx, b, update.Message.Chat.ID)
 }
 
-func loggingMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
-	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
-		if update.Message != nil && update.Message.Text != "" {
-			slog.Info("Received message",
-				"user_id", update.Message.From.ID,
-				"username", update.Message.From.Username,
-				"text", update.Message.Text,
-			)
-		}
-		next(ctx, b, update)
+func (h *Bot) decksHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update.Message == nil || update.Message.From == nil {
+		return
 	}
+	user, err := h.currentUser(ctx, update.Message.From.ID, update.Message.From.Username)
+	if err != nil {
+		slog.Error("Failed to get user", "error", err)
+		h.send(ctx, b, update.Message.Chat.ID, config.TryAgain, nil)
+		return
+	}
+	h.sessions.clear(update.Message.From.ID)
+	h.showDeckList(ctx, b, update.Message.Chat.ID, user.ID, 0)
+}
+
+func (h *Bot) newDeckHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update.Message == nil || update.Message.From == nil {
+		return
+	}
+	h.sessions.set(update.Message.From.ID, &session{State: stateDeckName})
+	h.send(ctx, b, update.Message.Chat.ID, config.AskDeckName, nil)
+}
+
+func (h *Bot) learnHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update.Message == nil || update.Message.From == nil {
+		return
+	}
+	user, err := h.currentUser(ctx, update.Message.From.ID, update.Message.From.Username)
+	if err != nil {
+		slog.Error("Failed to get user", "error", err)
+		h.send(ctx, b, update.Message.Chat.ID, config.TryAgain, nil)
+		return
+	}
+	h.sessions.clear(update.Message.From.ID)
+	h.showLearnSetup(ctx, b, update.Message.From.ID, update.Message.Chat.ID, user.ID, 0)
+}
+
+func (h *Bot) textHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update.Message == nil || update.Message.From == nil || update.Message.Text == "" {
+		return
+	}
+	user, err := h.currentUser(ctx, update.Message.From.ID, update.Message.From.Username)
+	if err != nil {
+		slog.Error("Failed to get user", "error", err)
+		h.send(ctx, b, update.Message.Chat.ID, config.TryAgain, nil)
+		return
+	}
+	h.handleText(ctx, b, update.Message.From.ID, update.Message.Chat.ID, user.ID, update.Message.Text)
 }
