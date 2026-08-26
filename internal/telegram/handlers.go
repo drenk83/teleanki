@@ -13,8 +13,7 @@ func (h *Bot) startHandler(ctx context.Context, b *bot.Bot, update *models.Updat
 	if update.Message == nil || update.Message.From == nil {
 		return
 	}
-	h.sessions.clear(update.Message.From.ID)
-	h.send(withNoMenu(ctx), b, update.Message.Chat.ID, config.StartMessage, kb(row(btn(config.BtnOpenMenu, "menu"))))
+	h.showMainMenu(ctx, b, update.Message.From.ID, update.Message.Chat.ID)
 }
 
 func (h *Bot) menuHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -50,7 +49,7 @@ func (h *Bot) newDeckHandler(ctx context.Context, b *bot.Bot, update *models.Upd
 		return
 	}
 	h.sessions.set(update.Message.From.ID, &session{State: stateDeckName})
-	h.send(ctx, b, update.Message.Chat.ID, config.AskDeckName, nil)
+	h.send(ctx, b, update.Message.Chat.ID, config.AskDeckName, cancelKB())
 }
 
 func (h *Bot) learnHandler(ctx context.Context, b *bot.Bot, update *models.Update) {

@@ -52,6 +52,8 @@ func (h *Bot) callbackHandler(ctx context.Context, b *bot.Bot, update *models.Up
 		h.onReverseCallback(ctx, b, tgID, chatID, user.ID, parts)
 	case "r":
 		h.onReviewCallback(ctx, b, tgID, chatID, user.ID, parts)
+	case "x":
+		h.onCancelCallback(ctx, b, tgID, chatID, user.ID)
 	case "i":
 		h.onImportCallback(ctx, b, tgID, chatID, user.ID, parts)
 	}
@@ -123,6 +125,8 @@ func (h *Bot) onLearnCallback(ctx context.Context, b *bot.Bot, tgID, chatID, use
 		h.startLearnFromSetup(ctx, b, tgID, chatID, userID)
 	case "random":
 		h.startRandomFromSetup(ctx, b, tgID, chatID, userID)
+	case "mode":
+		h.toggleLearnMode(ctx, b, tgID, chatID, userID)
 	case "page":
 		page := 0
 		if len(parts) >= 3 {
@@ -145,7 +149,7 @@ func (h *Bot) onDeckCallback(ctx context.Context, b *bot.Bot, tgID, chatID, user
 		h.showDeckList(ctx, b, chatID, userID, page)
 	case "new":
 		h.sessions.set(tgID, &session{State: stateDeckName})
-		h.send(ctx, b, chatID, config.AskDeckName, nil)
+		h.send(ctx, b, chatID, config.AskDeckName, cancelKB())
 	case "open":
 		id, ok := nthID(parts, 2)
 		if !ok {
@@ -153,6 +157,8 @@ func (h *Bot) onDeckCallback(ctx context.Context, b *bot.Bot, tgID, chatID, user
 		}
 		h.showDeck(ctx, b, chatID, userID, id)
 	case "join":
+		h.beginJoin(ctx, b, tgID, chatID)
+	case "import":
 		h.beginJoin(ctx, b, tgID, chatID)
 	case "share":
 		id, ok := nthID(parts, 2)
@@ -239,14 +245,14 @@ func (h *Bot) onCardCallback(ctx context.Context, b *bot.Bot, tgID, chatID, user
 			return
 		}
 		h.sessions.set(tgID, &session{State: stateEditFront, CardID: id})
-		h.send(ctx, b, chatID, config.AskEditFront, nil)
+		h.send(ctx, b, chatID, config.AskEditFront, cancelKB())
 	case "eb":
 		if _, _, err := h.cardOf(ctx, userID, id); err != nil {
 			h.send(ctx, b, chatID, config.SessionExpired, nil)
 			return
 		}
 		h.sessions.set(tgID, &session{State: stateEditBack, CardID: id})
-		h.send(ctx, b, chatID, config.AskEditBack, nil)
+		h.send(ctx, b, chatID, config.AskEditBack, cancelKB())
 	case "em":
 		if _, _, err := h.cardOf(ctx, userID, id); err != nil {
 			h.send(ctx, b, chatID, config.SessionExpired, nil)
@@ -268,7 +274,7 @@ func (h *Bot) onCardCallback(ctx context.Context, b *bot.Bot, tgID, chatID, user
 			return
 		}
 		h.sessions.set(tgID, &session{State: stateEditChoices, CardID: id})
-		h.send(ctx, b, chatID, config.AskEditChoices, nil)
+		h.send(ctx, b, chatID, config.AskEditChoices, cancelKB())
 	case "del":
 		if _, _, err := h.cardOf(ctx, userID, id); err != nil {
 			h.send(ctx, b, chatID, config.SessionExpired, nil)
@@ -317,6 +323,10 @@ func (h *Bot) onReviewCallback(ctx context.Context, b *bot.Bot, tgID, chatID, us
 		return
 	}
 	sess := h.sessions.get(tgID)
+	if len(parts) >= 2 && parts[1] == "stop" {
+		h.stopLearn(ctx, b, tgID, chatID, userID)
+		return
+	}
 	if sess.Learn == nil || !sess.Learn.Active() {
 		h.send(ctx, b, chatID, config.SessionExpired, nil)
 		return
@@ -359,6 +369,10 @@ func (h *Bot) onReviewCallback(ctx context.Context, b *bot.Bot, tgID, chatID, us
 		}
 		h.reviewQuizPick(ctx, b, tgID, chatID, userID, idx)
 	}
+}
+
+func (h *Bot) onCancelCallback(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64) {
+	h.cancelWizard(ctx, b, tgID, chatID, userID)
 }
 
 func (h *Bot) onImportCallback(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, parts []string) {

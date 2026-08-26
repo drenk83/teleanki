@@ -41,6 +41,7 @@ type User struct {
 	NotifyEnabled bool
 	NotifyHour    int
 	NotifyOnDate  time.Time
+	LearnFree     bool
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }

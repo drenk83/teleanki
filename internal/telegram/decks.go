@@ -25,7 +25,7 @@ func (h *Bot) showDeckList(ctx context.Context, b *bot.Bot, chatID, userID int64
 	if len(decks) == 0 {
 		h.send(ctx, b, chatID, config.DeckEmptyList, kb(
 			row(btn(config.BtnCreateDeck, "d:new")),
-			row(btn(config.BtnJoin, "d:join")),
+			row(btn(config.BtnImport, "d:import")),
 		))
 		return
 	}
@@ -37,8 +37,10 @@ func (h *Bot) showDeckList(ctx context.Context, b *bot.Bot, chatID, userID int64
 	if nav := pager(page, pages, "d:list"); len(nav) > 0 {
 		out = append(out, nav)
 	}
-	out = append(out, row(btn(config.BtnCreateDeck, "d:new"), btn(config.BtnJoin, "d:join")))
-	h.send(ctx, b, chatID, config.DeckListTitle, kb(out...))
+	out = append(out, row(btn(config.BtnCreateDeck, "d:new"), btn(config.BtnImport, "d:import")))
+	from := page*pageSize + 1
+	to := from + len(chunk) - 1
+	h.send(ctx, b, chatID, fmt.Sprintf(config.DeckListTitle, from, to, len(decks)), kb(out...))
 }
 
 func (h *Bot) showDeck(ctx context.Context, b *bot.Bot, chatID, userID, deckID int64) {
@@ -83,7 +85,7 @@ func (h *Bot) showDeck(ctx context.Context, b *bot.Bot, chatID, userID, deckID i
 func (h *Bot) createDeckFromText(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, name string) {
 	name, err := domain.NormalizeDeckName(name)
 	if err != nil {
-		h.send(ctx, b, chatID, config.InvalidDeckName+"\n"+config.AskDeckName, nil)
+		h.send(ctx, b, chatID, config.InvalidDeckName+"\n"+config.AskDeckName, cancelKB())
 		return
 	}
 	d, err := h.decks.Create(ctx, userID, name)
@@ -188,8 +190,8 @@ func (h *Bot) rotateShare(ctx context.Context, b *bot.Bot, chatID, userID, deckI
 }
 
 func (h *Bot) beginJoin(ctx context.Context, b *bot.Bot, tgID, chatID int64) {
-	h.sessions.set(tgID, &session{State: stateJoinCode})
-	h.send(ctx, b, chatID, config.AskShareCode, nil)
+	h.sessions.set(tgID, &session{State: stateImportWait})
+	h.send(ctx, b, chatID, config.ImportWait, nil)
 }
 
 func (h *Bot) joinFromText(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, text string) {

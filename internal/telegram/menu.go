@@ -15,7 +15,7 @@ import (
 
 func (h *Bot) showMainMenu(ctx context.Context, b *bot.Bot, tgID, chatID int64) {
 	h.sessions.clear(tgID)
-	h.send(withNoMenu(ctx), b, chatID, config.MenuTitle, mainMenuKeyboard())
+	h.send(withNoMenu(ctx), b, chatID, config.StartMessage, mainMenuKeyboard())
 }
 
 func (h *Bot) showHelp(ctx context.Context, b *bot.Bot, chatID int64) {

@@ -25,7 +25,10 @@ func (h *Bot) showLearnSetup(ctx context.Context, b *bot.Bot, tgID, chatID, user
 		return
 	}
 	if len(decks) == 0 {
-		h.send(ctx, b, chatID, config.LearnNoneDecks, kb(row(btn(config.BtnCreateDeck, "d:new"))))
+		h.send(ctx, b, chatID, config.LearnNoneDecks, kb(
+			row(btn(config.BtnCreateDeck, "d:new")),
+			row(btn(config.BtnImport, "d:import")),
+		))
 		return
 	}
 	selected, err := h.users.LearnDeckIDs(ctx, userID)
@@ -55,7 +58,13 @@ func (h *Bot) showLearnSetup(ctx context.Context, b *bot.Bot, tgID, chatID, user
 		}
 	}
 	left := u.RemainingToday(time.Now())
-	text := fmt.Sprintf(config.LearnTitle, label, u.DailyLimit, left)
+	modeName := config.LearnModeStd
+	modeBtn := config.BtnLearnModeStd
+	if u.LearnFree {
+		modeName = config.LearnModeFree
+		modeBtn = config.BtnLearnModeFree
+	}
+	text := fmt.Sprintf(config.LearnTitle, label, u.DailyLimit, left, modeName)
 
 	chunk, page, pages := pageSlice(decks, page)
 	rows := make([][]models.InlineKeyboardButton, 0, len(chunk)+4)
@@ -73,14 +82,14 @@ func (h *Bot) showLearnSetup(ctx context.Context, b *bot.Bot, tgID, chatID, user
 	}
 	rows = append(rows,
 		row(btn(config.BtnLearnAll, "l:all")),
-		row(btn(config.BtnLearnStart, "l:start"), btn(config.BtnLearnRandom, "l:random")),
+		row(btn(modeBtn, "l:mode"), btn(config.BtnLearnStart, "l:start")),
 		row(btn(config.BtnMenuSettings, "menu:settings")),
 	)
 	h.send(ctx, b, chatID, text, kb(rows...))
 }
 
 func (h *Bot) toggleLearnDeck(ctx context.Context, b *bot.Bot, tgID, chatID, userID, deckID int64, page int) {
-	if _, err := h.deckOf(ctx, userID, deckID); err != nil {
+	if _, err := h.deckSeen(ctx, userID, deckID); err != nil {
 		h.send(ctx, b, chatID, config.SessionExpired, nil)
 		return
 	}
@@ -142,7 +151,51 @@ func (h *Bot) startLearnFromSetup(ctx context.Context, b *bot.Bot, tgID, chatID,
 		h.send(ctx, b, chatID, config.TryAgain, nil)
 		return
 	}
+	u, err := h.users.GetByTelegramID(ctx, tgID)
+	if err != nil {
+		slog.Error("Failed to get user", "error", err)
+		h.send(ctx, b, chatID, config.TryAgain, nil)
+		return
+	}
+	if u.LearnFree {
+		h.startRandom(ctx, b, tgID, chatID, userID, ids)
+		return
+	}
 	h.startReview(ctx, b, tgID, chatID, userID, ids)
+}
+
+func (h *Bot) toggleLearnMode(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64) {
+	u, err := h.users.GetByTelegramID(ctx, tgID)
+	if err != nil {
+		h.send(ctx, b, chatID, config.TryAgain, nil)
+		return
+	}
+	if err := h.users.SetLearnFree(ctx, userID, !u.LearnFree); err != nil {
+		slog.Error("Failed to set learn mode", "error", err)
+		h.send(ctx, b, chatID, config.TryAgain, nil)
+		return
+	}
+	h.showLearnSetup(ctx, b, tgID, chatID, userID, 0)
+}
+
+func (h *Bot) stopLearn(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64) {
+	h.sessions.clear(tgID)
+	h.showLearnSetup(ctx, b, tgID, chatID, userID, 0)
+}
+
+func (h *Bot) cancelWizard(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64) {
+	sess := h.sessions.get(tgID)
+	cardID, deckID := sess.CardID, sess.DeckID
+	h.sessions.clear(tgID)
+	if cardID != 0 {
+		h.showCard(ctx, b, chatID, userID, cardID)
+		return
+	}
+	if deckID != 0 {
+		h.showDeck(ctx, b, chatID, userID, deckID)
+		return
+	}
+	h.showMainMenu(ctx, b, tgID, chatID)
 }
 
 func (h *Bot) startRandomFromSetup(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64) {

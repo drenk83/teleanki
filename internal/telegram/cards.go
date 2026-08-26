@@ -21,7 +21,7 @@ func (h *Bot) beginAddCard(ctx context.Context, b *bot.Bot, tgID, chatID, userID
 		return
 	}
 	h.sessions.set(tgID, &session{State: stateCardFront, DeckID: deckID})
-	h.send(ctx, b, chatID, config.AskCardFront, nil)
+	h.send(ctx, b, chatID, config.AskCardFront, kb(cancelRow()))
 }
 
 func (h *Bot) showCardList(ctx context.Context, b *bot.Bot, chatID, userID, deckID int64, page int) {
@@ -116,7 +116,7 @@ func (h *Bot) addCardFront(ctx context.Context, b *bot.Bot, tgID, chatID int64, 
 	sess.DraftFront = front
 	sess.State = stateCardBack
 	h.sessions.set(tgID, sess)
-	h.send(ctx, b, chatID, config.AskCardBack, nil)
+	h.send(ctx, b, chatID, config.AskCardBack, cancelKB())
 }
 
 func (h *Bot) addCardFrontPhoto(ctx context.Context, b *bot.Bot, tgID, chatID int64, text, image string) {
@@ -131,7 +131,7 @@ func (h *Bot) addCardFrontPhoto(ctx context.Context, b *bot.Bot, tgID, chatID in
 	sess.DraftFrontImage = image
 	sess.State = stateCardBack
 	h.sessions.set(tgID, sess)
-	h.send(ctx, b, chatID, config.AskCardBack, nil)
+	h.send(ctx, b, chatID, config.AskCardBack, cancelKB())
 }
 
 func (h *Bot) addCardBack(ctx context.Context, b *bot.Bot, tgID, chatID int64, text string) {
@@ -174,7 +174,7 @@ func (h *Bot) addCardSetMode(ctx context.Context, b *bot.Bot, tgID, chatID, user
 	if mode == domain.ModeQuiz {
 		sess.State = stateCardChoices
 		h.sessions.set(tgID, sess)
-		h.send(ctx, b, chatID, config.AskCardChoices, nil)
+		h.send(ctx, b, chatID, config.AskCardChoices, cancelKB())
 		return
 	}
 	sess.State = stateCardReverse
@@ -210,7 +210,7 @@ func (h *Bot) saveNewCard(ctx context.Context, b *bot.Bot, tgID, chatID, userID 
 	}
 	c, err := domain.NewCard(sess.DeckID, sess.DraftFront, sess.DraftBack, sess.DraftMode, distractors, sess.DraftReversible)
 	if err != nil {
-		h.send(ctx, b, chatID, config.InvalidChoices+"\n"+config.AskCardChoices, nil)
+		h.send(ctx, b, chatID, config.InvalidChoices+"\n"+config.AskCardChoices, cancelKB())
 		return
 	}
 	c.FrontImage = sess.DraftFrontImage

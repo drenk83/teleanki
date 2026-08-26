@@ -26,6 +26,7 @@ const (
 	stateDailyLimit     state = "daily_limit"
 	stateNotifyHour     state = "notify_hour"
 	stateJoinCode       state = "join_code"
+	stateImportWait     state = "import_wait"
 )
 
 const (

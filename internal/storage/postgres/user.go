@@ -116,6 +116,17 @@ WHERE id = ANY($2)
 	return tx.Commit(ctx)
 }
 
+func (r *UserRepository) SetLearnFree(ctx context.Context, userID int64, free bool) error {
+	tag, err := r.pool.Exec(ctx, `UPDATE users SET learn_free = $2, updated_at = now() WHERE id = $1`, userID, free)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return storage.ErrNotFound
+	}
+	return nil
+}
+
 func (r *UserRepository) SetNotify(ctx context.Context, userID int64, enabled bool, hour int) (*domain.User, error) {
 	u, err := scanUser(r.pool.QueryRow(ctx, `
 UPDATE users SET notify_enabled = $2, notify_hour = $3, updated_at = now()

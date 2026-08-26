@@ -15,7 +15,7 @@ const cardCols = `id, deck_id, front, back, front_image, back_image, mode, choic
 
 const deckCols = `id, user_id, name, COALESCE(share_code, ''), created_at, updated_at`
 
-const userCols = `id, telegram_id, username, daily_limit, reviews_today, reviews_on_date, notify_enabled, notify_hour, notify_on_date, created_at, updated_at`
+const userCols = `id, telegram_id, username, daily_limit, reviews_today, reviews_on_date, notify_enabled, notify_hour, notify_on_date, learn_free, created_at, updated_at`
 
 const dueItemCols = `
     c.id, c.deck_id, c.front, c.back, c.front_image, c.back_image, c.mode, c.choices, c.reversible, c.created_at, c.updated_at,
@@ -169,6 +169,7 @@ func scanUser(row pgx.Row) (domain.User, error) {
 		&u.NotifyEnabled,
 		&u.NotifyHour,
 		&u.NotifyOnDate,
+		&u.LearnFree,
 		&u.CreatedAt,
 		&u.UpdatedAt,
 	)

@@ -32,7 +32,7 @@ func modeKeyboard() *models.InlineKeyboardMarkup {
 		btn(config.BtnRecall, "m:recall"),
 		btn(config.BtnQuiz, "m:quiz"),
 		btn(config.BtnTypein, "m:typein"),
-	))
+	), cancelRow())
 }
 
 func cardModeKeyboard(cardID int64) *models.InlineKeyboardMarkup {
@@ -48,7 +48,7 @@ func reverseKeyboard() *models.InlineKeyboardMarkup {
 	return kb(row(
 		btn(config.BtnYes, "v:1"),
 		btn(config.BtnNo, "v:0"),
-	))
+	), cancelRow())
 }
 
 func nextKeyboard() *models.InlineKeyboardMarkup {
@@ -62,6 +62,14 @@ func ratingKeyboard() *models.InlineKeyboardMarkup {
 		btn(config.BtnGood, "r:good"),
 		btn(config.BtnEasy, "r:easy"),
 	))
+}
+
+func cancelRow() []models.InlineKeyboardButton {
+	return row(btn(config.BtnCancel, "x:cancel"))
+}
+
+func cancelKB() *models.InlineKeyboardMarkup {
+	return kb(cancelRow())
 }
 
 func settingsKeyboard() *models.InlineKeyboardMarkup {
