@@ -44,6 +44,17 @@ func cardModeKeyboard(cardID int64) *models.InlineKeyboardMarkup {
 	))
 }
 
+func reverseKeyboard() *models.InlineKeyboardMarkup {
+	return kb(row(
+		btn(config.BtnYes, "v:1"),
+		btn(config.BtnNo, "v:0"),
+	))
+}
+
+func nextKeyboard() *models.InlineKeyboardMarkup {
+	return kb(row(btn(config.BtnLearnNext, "r:next")))
+}
+
 func ratingKeyboard() *models.InlineKeyboardMarkup {
 	return kb(row(
 		btn(config.BtnAgain, "r:again"),

@@ -43,6 +43,53 @@ WHERE card_id = $1`
 	return &rev, nil
 }
 
+func (r *ReviewRepository) Apply(ctx context.Context, review *domain.Review, userID int64, now time.Time) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	const upd = `
+UPDATE reviews r
+SET easiness = $3, interval_days = $4, repetitions = $5, due_at = $6, updated_at = now()
+FROM cards c
+JOIN decks d ON d.id = c.deck_id
+WHERE r.card_id = $1
+  AND c.id = r.card_id
+  AND d.user_id = $2
+RETURNING r.updated_at`
+	err = tx.QueryRow(ctx, upd,
+		review.CardID,
+		userID,
+		review.Easiness,
+		review.IntervalDays,
+		review.Repetitions,
+		review.DueAt,
+	).Scan(&review.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return storage.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+
+	day := utcDate(now)
+	tag, err := tx.Exec(ctx, `
+UPDATE users SET
+    reviews_on_date = $2,
+    reviews_today = CASE WHEN reviews_on_date = $2 THEN reviews_today + 1 ELSE 1 END,
+    updated_at = now()
+WHERE id = $1`, userID, day)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return storage.ErrNotFound
+	}
+	return tx.Commit(ctx)
+}
+
 func (r *ReviewRepository) Update(ctx context.Context, review *domain.Review) error {
 	const q = `
 UPDATE reviews
@@ -63,61 +110,67 @@ RETURNING updated_at`
 	return err
 }
 
+const dueItemCols = `
+    c.id, c.deck_id, c.front, c.back, c.mode, c.choices, c.reversible, c.created_at, c.updated_at,
+    d.id, d.user_id, d.name, d.created_at, d.updated_at,
+    r.card_id, r.easiness, r.interval_days, r.repetitions, r.due_at, r.updated_at`
+
 func (r *ReviewRepository) ListDue(ctx context.Context, userID int64, deckIDs []int64, now time.Time, limit int) ([]storage.DueItem, error) {
 	if deckIDs == nil {
 		deckIDs = []int64{}
 	}
-	const q = `
-SELECT
-    c.id, c.deck_id, c.front, c.back, c.mode, c.choices, c.created_at, c.updated_at,
-    d.id, d.user_id, d.name, d.created_at, d.updated_at,
-    r.card_id, r.easiness, r.interval_days, r.repetitions, r.due_at, r.updated_at
+	q := `
+SELECT` + dueItemCols + `
 FROM reviews r
 JOIN cards c ON c.id = r.card_id
 JOIN decks d ON d.id = c.deck_id
 WHERE d.user_id = $1
   AND r.due_at <= $2
   AND (cardinality($3::bigint[]) = 0 OR d.id = ANY($3::bigint[]))
-ORDER BY r.due_at ASC, c.id ASC
+ORDER BY r.due_at ASC, c.id ASC`
+	var rows pgx.Rows
+	var err error
+	if limit > 0 {
+		q += `
 LIMIT $4`
-
-	rows, err := r.pool.Query(ctx, q, userID, now, deckIDs, limit)
+		rows, err = r.pool.Query(ctx, q, userID, now, deckIDs, limit)
+	} else {
+		rows, err = r.pool.Query(ctx, q, userID, now, deckIDs)
+	}
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	return collectDueItems(rows)
+}
 
+func (r *ReviewRepository) ListForLearn(ctx context.Context, userID int64, deckIDs []int64) ([]storage.DueItem, error) {
+	if deckIDs == nil {
+		deckIDs = []int64{}
+	}
+	q := `
+SELECT` + dueItemCols + `
+FROM reviews r
+JOIN cards c ON c.id = r.card_id
+JOIN decks d ON d.id = c.deck_id
+WHERE d.user_id = $1
+  AND (cardinality($2::bigint[]) = 0 OR d.id = ANY($2::bigint[]))
+ORDER BY c.id ASC`
+
+	rows, err := r.pool.Query(ctx, q, userID, deckIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectDueItems(rows)
+}
+
+func collectDueItems(rows pgx.Rows) ([]storage.DueItem, error) {
 	var out []storage.DueItem
 	for rows.Next() {
-		var item storage.DueItem
-		var cardMode string
-		err := rows.Scan(
-			&item.Card.ID,
-			&item.Card.DeckID,
-			&item.Card.Front,
-			&item.Card.Back,
-			&cardMode,
-			&item.Card.Choices,
-			&item.Card.CreatedAt,
-			&item.Card.UpdatedAt,
-			&item.Deck.ID,
-			&item.Deck.UserID,
-			&item.Deck.Name,
-			&item.Deck.CreatedAt,
-			&item.Deck.UpdatedAt,
-			&item.Review.CardID,
-			&item.Review.Easiness,
-			&item.Review.IntervalDays,
-			&item.Review.Repetitions,
-			&item.Review.DueAt,
-			&item.Review.UpdatedAt,
-		)
+		item, err := scanDueItem(rows)
 		if err != nil {
 			return nil, err
-		}
-		item.Card.Mode = domain.Mode(cardMode)
-		if item.Card.Choices == nil {
-			item.Card.Choices = []string{}
 		}
 		out = append(out, item)
 	}

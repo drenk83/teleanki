@@ -27,10 +27,10 @@ func (h *Bot) handleText(ctx context.Context, b *bot.Bot, tgID, chatID, userID i
 	case stateEditChoices:
 		h.editCardChoices(ctx, b, tgID, chatID, userID, text)
 	case stateTypein:
-		h.reviewTypein(ctx, b, tgID, chatID, text)
+		h.reviewTypein(ctx, b, tgID, chatID, userID, text)
 	case stateDailyLimit:
 		h.setDailyLimitFromText(ctx, b, tgID, chatID, userID, text)
-	case stateCardMode, stateImportConflict:
+	case stateCardMode, stateCardReverse, stateImportConflict:
 		h.send(ctx, b, chatID, config.UseButtons, nil)
 	default:
 		h.send(ctx, b, chatID, config.UnknownCommand, nil)

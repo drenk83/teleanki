@@ -52,7 +52,7 @@ func (r *CardRepository) CreateMany(ctx context.Context, deckID int64, cards []d
 
 func (r *CardRepository) GetByID(ctx context.Context, id int64) (*domain.Card, error) {
 	const q = `
-SELECT id, deck_id, front, back, mode, choices, created_at, updated_at
+SELECT id, deck_id, front, back, mode, choices, reversible, created_at, updated_at
 FROM cards
 WHERE id = $1`
 
@@ -68,7 +68,7 @@ WHERE id = $1`
 
 func (r *CardRepository) ListByDeck(ctx context.Context, deckID int64) ([]domain.Card, error) {
 	const q = `
-SELECT id, deck_id, front, back, mode, choices, created_at, updated_at
+SELECT id, deck_id, front, back, mode, choices, reversible, created_at, updated_at
 FROM cards
 WHERE deck_id = $1
 ORDER BY id`
@@ -99,11 +99,11 @@ func (r *CardRepository) CountByDeck(ctx context.Context, deckID int64) (int, er
 func (r *CardRepository) Update(ctx context.Context, card *domain.Card) error {
 	const q = `
 UPDATE cards
-SET front = $2, back = $3, mode = $4, choices = $5, updated_at = now()
+SET front = $2, back = $3, mode = $4, choices = $5, reversible = $6, updated_at = now()
 WHERE id = $1
 RETURNING updated_at`
 
-	err := r.pool.QueryRow(ctx, q, card.ID, card.Front, card.Back, string(card.Mode), card.Choices).Scan(&card.UpdatedAt)
+	err := r.pool.QueryRow(ctx, q, card.ID, card.Front, card.Back, string(card.Mode), card.Choices, card.Reversible).Scan(&card.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return storage.ErrNotFound
 	}

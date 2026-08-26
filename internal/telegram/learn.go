@@ -72,7 +72,8 @@ func (h *Bot) showLearnSetup(ctx context.Context, b *bot.Bot, tgID, chatID, user
 		rows = append(rows, nav)
 	}
 	rows = append(rows,
-		row(btn(config.BtnLearnAll, "l:all"), btn(config.BtnLearnStart, "l:start")),
+		row(btn(config.BtnLearnAll, "l:all")),
+		row(btn(config.BtnLearnStart, "l:start"), btn(config.BtnLearnRandom, "l:random")),
 		row(btn(config.BtnMenuSettings, "menu:settings")),
 	)
 	h.send(ctx, b, chatID, text, kb(rows...))
@@ -142,4 +143,14 @@ func (h *Bot) startLearnFromSetup(ctx context.Context, b *bot.Bot, tgID, chatID,
 		return
 	}
 	h.startReview(ctx, b, tgID, chatID, userID, ids)
+}
+
+func (h *Bot) startRandomFromSetup(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64) {
+	ids, err := h.users.LearnDeckIDs(ctx, userID)
+	if err != nil {
+		slog.Error("Failed to get learn decks", "error", err)
+		h.send(ctx, b, chatID, config.TryAgain, nil)
+		return
+	}
+	h.startRandom(ctx, b, tgID, chatID, userID, ids)
 }

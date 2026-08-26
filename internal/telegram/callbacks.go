@@ -48,8 +48,10 @@ func (h *Bot) callbackHandler(ctx context.Context, b *bot.Bot, update *models.Up
 		h.onCardCallback(ctx, b, tgID, chatID, user.ID, parts)
 	case "m":
 		h.onModeCallback(ctx, b, tgID, chatID, user.ID, parts)
+	case "v":
+		h.onReverseCallback(ctx, b, tgID, chatID, user.ID, parts)
 	case "r":
-		h.onReviewCallback(ctx, b, tgID, chatID, parts)
+		h.onReviewCallback(ctx, b, tgID, chatID, user.ID, parts)
 	case "i":
 		h.onImportCallback(ctx, b, tgID, chatID, user.ID, parts)
 	}
@@ -112,6 +114,8 @@ func (h *Bot) onLearnCallback(ctx context.Context, b *bot.Bot, tgID, chatID, use
 		h.setLearnAllDecks(ctx, b, tgID, chatID, userID)
 	case "start":
 		h.startLearnFromSetup(ctx, b, tgID, chatID, userID)
+	case "random":
+		h.startRandomFromSetup(ctx, b, tgID, chatID, userID)
 	case "page":
 		page := 0
 		if len(parts) >= 3 {
@@ -239,12 +243,18 @@ func (h *Bot) onCardCallback(ctx context.Context, b *bot.Bot, tgID, chatID, user
 		h.sessions.set(tgID, &session{State: stateEditChoices, CardID: id})
 		h.send(ctx, b, chatID, config.AskEditChoices, nil)
 	case "del":
+		if _, _, err := h.cardOf(ctx, userID, id); err != nil {
+			h.send(ctx, b, chatID, config.SessionExpired, nil)
+			return
+		}
 		sid := strconv.FormatInt(id, 10)
 		h.send(ctx, b, chatID, config.ConfirmDeleteCard, kb(
 			row(btn(config.BtnYes, "c:delok:"+sid), btn(config.BtnNo, "c:open:"+sid)),
 		))
 	case "delok":
 		h.deleteCard(ctx, b, chatID, userID, id)
+	case "rev":
+		h.toggleCardReverse(ctx, b, chatID, userID, id)
 	}
 }
 
@@ -264,38 +274,50 @@ func (h *Bot) onModeCallback(ctx context.Context, b *bot.Bot, tgID, chatID, user
 	h.addCardSetMode(ctx, b, tgID, chatID, userID, mode)
 }
 
-func (h *Bot) onReviewCallback(ctx context.Context, b *bot.Bot, tgID, chatID int64, parts []string) {
+func (h *Bot) onReverseCallback(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, parts []string) {
+	if len(parts) < 2 {
+		return
+	}
+	h.addCardSetReverse(ctx, b, tgID, chatID, userID, parts[1] == "1")
+}
+
+func (h *Bot) onReviewCallback(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, parts []string) {
 	if len(parts) < 2 {
 		return
 	}
 	sess := h.sessions.get(tgID)
-	if len(sess.Review) == 0 {
+	if sess.Learn == nil || !sess.Learn.Active() {
 		h.send(ctx, b, chatID, config.SessionExpired, nil)
 		return
 	}
 	switch parts[1] {
 	case "show":
-		h.reviewShow(ctx, b, tgID, chatID)
+		h.reviewShow(ctx, b, tgID, chatID, userID)
 	case "again":
-		if !sess.Shown {
+		if !sess.Learn.Shown {
 			return
 		}
-		h.reviewRate(ctx, b, tgID, chatID, scheduler.RatingAgain)
+		h.reviewRate(ctx, b, tgID, chatID, userID, scheduler.RatingAgain)
 	case "hard":
-		if !sess.Shown {
+		if !sess.Learn.Shown {
 			return
 		}
-		h.reviewRate(ctx, b, tgID, chatID, scheduler.RatingHard)
+		h.reviewRate(ctx, b, tgID, chatID, userID, scheduler.RatingHard)
 	case "good":
-		if !sess.Shown {
+		if !sess.Learn.Shown {
 			return
 		}
-		h.reviewRate(ctx, b, tgID, chatID, scheduler.RatingGood)
+		h.reviewRate(ctx, b, tgID, chatID, userID, scheduler.RatingGood)
 	case "easy":
-		if !sess.Shown {
+		if !sess.Learn.Shown {
 			return
 		}
-		h.reviewRate(ctx, b, tgID, chatID, scheduler.RatingEasy)
+		h.reviewRate(ctx, b, tgID, chatID, userID, scheduler.RatingEasy)
+	case "next":
+		if !sess.Learn.Infinite || !sess.Learn.Shown {
+			return
+		}
+		h.reviewNext(ctx, b, tgID, chatID, userID)
 	case "q":
 		if len(parts) < 3 {
 			return
@@ -304,7 +326,7 @@ func (h *Bot) onReviewCallback(ctx context.Context, b *bot.Bot, tgID, chatID int
 		if err != nil {
 			return
 		}
-		h.reviewQuizPick(ctx, b, tgID, chatID, idx)
+		h.reviewQuizPick(ctx, b, tgID, chatID, userID, idx)
 	}
 }
 

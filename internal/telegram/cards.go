@@ -65,18 +65,38 @@ func (h *Bot) showCard(ctx context.Context, b *bot.Bot, chatID, userID, cardID i
 		return
 	}
 	modeText := config.ModeLabel(c.Mode)
-	choicesLine := ""
-	if len(c.Choices) > 0 {
-		choicesLine = fmt.Sprintf(config.CardChoicesLine, joinChoices(c.Choices))
+	extra := ""
+	if c.Mode == domain.ModeQuiz && len(c.Choices) > 0 {
+		extra += fmt.Sprintf(config.CardChoicesLine, joinChoices(c.Choices))
 	}
-	text := fmt.Sprintf(config.CardView, clip(c.Front, 1500), clip(c.Back, 1500), modeText, choicesLine)
+	if c.Mode != domain.ModeQuiz {
+		if c.Reversible {
+			extra += config.CardReverseOn
+		} else {
+			extra += config.CardReverseOff
+		}
+	}
+	text := fmt.Sprintf(config.CardView, clip(c.Front, 1500), clip(c.Back, 1500), modeText, extra)
 	id := strconv.FormatInt(c.ID, 10)
-	h.send(ctx, b, chatID, text, kb(
+	rows := [][]models.InlineKeyboardButton{
 		row(btn(config.BtnEditFront, "c:ef:"+id), btn(config.BtnEditBack, "c:eb:"+id)),
-		row(btn(config.BtnMode, "c:em:"+id), btn(config.BtnEditChoices, "c:ec:"+id)),
+		row(btn(config.BtnMode, "c:em:"+id)),
+	}
+	if c.Mode == domain.ModeQuiz {
+		rows[1] = append(rows[1], btn(config.BtnEditChoices, "c:ec:"+id))
+	}
+	if c.Mode != domain.ModeQuiz {
+		label := config.BtnReverseOff
+		if c.Reversible {
+			label = config.BtnReverseOn
+		}
+		rows = append(rows, row(btn(label, "c:rev:"+id)))
+	}
+	rows = append(rows,
 		row(btn(config.BtnDelete, "c:del:"+id)),
 		row(btn(config.BtnBackToDeck, "d:open:"+strconv.FormatInt(d.ID, 10))),
-	))
+	)
+	h.send(ctx, b, chatID, text, kb(rows...))
 }
 
 func (h *Bot) addCardFront(ctx context.Context, b *bot.Bot, tgID, chatID int64, text string) {
@@ -113,37 +133,50 @@ func (h *Bot) addCardSetMode(ctx context.Context, b *bot.Bot, tgID, chatID, user
 		return
 	}
 	sess.DraftMode = mode
+	sess.DraftReversible = false
 	if mode == domain.ModeQuiz {
 		sess.State = stateCardChoices
 		h.sessions.set(tgID, sess)
 		h.send(ctx, b, chatID, config.AskCardChoices, nil)
 		return
 	}
+	sess.State = stateCardReverse
+	h.sessions.set(tgID, sess)
+	h.send(ctx, b, chatID, config.AskCardReverse, reverseKeyboard())
+}
+
+func (h *Bot) addCardSetReverse(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, reversible bool) {
+	sess := h.sessions.get(tgID)
+	if sess.State != stateCardReverse {
+		h.send(ctx, b, chatID, config.SessionExpired, nil)
+		return
+	}
+	if _, err := h.deckOf(ctx, userID, sess.DeckID); err != nil {
+		h.sessions.clear(tgID)
+		h.send(ctx, b, chatID, config.SessionExpired, nil)
+		return
+	}
+	sess.DraftReversible = reversible
 	h.saveNewCard(ctx, b, tgID, chatID, userID, sess, nil)
 }
 
 func (h *Bot) addCardChoices(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, text string) {
 	sess := h.sessions.get(tgID)
-	choices, err := domain.BuildQuizChoices(sess.DraftBack, splitLines(text))
+	h.saveNewCard(ctx, b, tgID, chatID, userID, sess, splitLines(text))
+}
+
+func (h *Bot) saveNewCard(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, sess *session, distractors []string) {
+	if _, err := h.deckOf(ctx, userID, sess.DeckID); err != nil {
+		h.sessions.clear(tgID)
+		h.send(ctx, b, chatID, config.SessionExpired, nil)
+		return
+	}
+	c, err := domain.NewCard(sess.DeckID, sess.DraftFront, sess.DraftBack, sess.DraftMode, distractors, sess.DraftReversible)
 	if err != nil {
 		h.send(ctx, b, chatID, config.InvalidChoices+"\n"+config.AskCardChoices, nil)
 		return
 	}
-	h.saveNewCard(ctx, b, tgID, chatID, userID, sess, choices)
-}
-
-func (h *Bot) saveNewCard(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, sess *session, choices []string) {
-	if choices == nil {
-		choices = []string{}
-	}
-	c := &domain.Card{
-		DeckID:  sess.DeckID,
-		Front:   sess.DraftFront,
-		Back:    sess.DraftBack,
-		Mode:    sess.DraftMode,
-		Choices: choices,
-	}
-	created, err := h.cards.Create(ctx, c)
+	created, err := h.cards.Create(ctx, &c)
 	if err != nil {
 		slog.Error("Failed to create card", "error", err)
 		h.send(ctx, b, chatID, config.TryAgain, nil)
@@ -154,49 +187,53 @@ func (h *Bot) saveNewCard(ctx context.Context, b *bot.Bot, tgID, chatID, userID 
 }
 
 func (h *Bot) editCardFront(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, text string) {
-	front, err := domain.NormalizeCardText(text)
+	sess := h.sessions.get(tgID)
+	c, _, err := h.cardOf(ctx, userID, sess.CardID)
+	if err != nil {
+		h.sessions.clear(tgID)
+		h.send(ctx, b, chatID, config.SessionExpired, nil)
+		return
+	}
+	next, err := c.WithFront(text)
 	if err != nil {
 		h.send(ctx, b, chatID, config.InvalidCardText+"\n"+config.AskEditFront, nil)
 		return
 	}
-	sess := h.sessions.get(tgID)
-	c, _, err := h.cardOf(ctx, userID, sess.CardID)
-	if err != nil {
-		h.sessions.clear(tgID)
-		h.send(ctx, b, chatID, config.SessionExpired, nil)
-		return
-	}
-	c.Front = front
-	if err := h.cards.Update(ctx, c); err != nil {
+	if err := h.cards.Update(ctx, &next); err != nil {
 		slog.Error("Failed to update card", "error", err)
 		h.send(ctx, b, chatID, config.TryAgain, nil)
 		return
 	}
 	h.sessions.clear(tgID)
-	h.showCard(ctx, b, chatID, userID, c.ID)
+	h.showCard(ctx, b, chatID, userID, next.ID)
 }
 
 func (h *Bot) editCardBack(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, text string) {
-	back, err := domain.NormalizeCardText(text)
-	if err != nil {
-		h.send(ctx, b, chatID, config.InvalidCardText+"\n"+config.AskEditBack, nil)
-		return
-	}
 	sess := h.sessions.get(tgID)
-	c, _, err := h.cardOf(ctx, userID, sess.CardID)
+	c, d, err := h.cardOf(ctx, userID, sess.CardID)
 	if err != nil {
 		h.sessions.clear(tgID)
 		h.send(ctx, b, chatID, config.SessionExpired, nil)
 		return
 	}
-	c.Back = back
-	if err := h.cards.Update(ctx, c); err != nil {
+	next, err := c.WithBack(text)
+	if err != nil {
+		back, nerr := domain.NormalizeCardText(text)
+		if nerr != nil {
+			h.send(ctx, b, chatID, config.InvalidCardText+"\n"+config.AskEditBack, nil)
+			return
+		}
+		h.sessions.set(tgID, &session{State: stateEditChoices, CardID: c.ID, DeckID: d.ID, DraftBack: back})
+		h.send(ctx, b, chatID, config.InvalidChoices+"\n"+config.AskEditChoices, nil)
+		return
+	}
+	if err := h.cards.Update(ctx, &next); err != nil {
 		slog.Error("Failed to update card", "error", err)
 		h.send(ctx, b, chatID, config.TryAgain, nil)
 		return
 	}
 	h.sessions.clear(tgID)
-	h.showCard(ctx, b, chatID, userID, c.ID)
+	h.showCard(ctx, b, chatID, userID, next.ID)
 }
 
 func (h *Bot) editCardChoices(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, text string) {
@@ -207,19 +244,24 @@ func (h *Bot) editCardChoices(ctx context.Context, b *bot.Bot, tgID, chatID, use
 		h.send(ctx, b, chatID, config.SessionExpired, nil)
 		return
 	}
-	choices, err := domain.BuildQuizChoices(c.Back, splitLines(text))
-	if err != nil {
+	var next domain.Card
+	var qerr error
+	if sess.DraftBack != "" {
+		next, qerr = c.BecomeQuizWithBack(sess.DraftBack, splitLines(text))
+	} else {
+		next, qerr = c.BecomeQuiz(splitLines(text))
+	}
+	if qerr != nil {
 		h.send(ctx, b, chatID, config.InvalidChoices+"\n"+config.AskEditChoices, nil)
 		return
 	}
-	c.Choices = choices
-	if err := h.cards.Update(ctx, c); err != nil {
+	if err := h.cards.Update(ctx, &next); err != nil {
 		slog.Error("Failed to update card", "error", err)
 		h.send(ctx, b, chatID, config.TryAgain, nil)
 		return
 	}
 	h.sessions.clear(tgID)
-	h.showCard(ctx, b, chatID, userID, c.ID)
+	h.showCard(ctx, b, chatID, userID, next.ID)
 }
 
 func (h *Bot) setCardMode(ctx context.Context, b *bot.Bot, tgID, chatID, userID, cardID int64, mode domain.Mode) {
@@ -228,25 +270,22 @@ func (h *Bot) setCardMode(ctx context.Context, b *bot.Bot, tgID, chatID, userID,
 		h.send(ctx, b, chatID, config.SessionExpired, nil)
 		return
 	}
-	c.Mode = mode
-	if mode == domain.ModeQuiz {
-		if err := domain.ValidateQuizChoices(c.Back, c.Choices); err != nil {
-			h.sessions.set(tgID, &session{State: stateEditChoices, CardID: c.ID, DeckID: d.ID})
-			if err := h.cards.Update(ctx, c); err != nil {
-				slog.Error("Failed to update card", "error", err)
-				h.send(ctx, b, chatID, config.TryAgain, nil)
-				return
-			}
-			h.send(ctx, b, chatID, config.AskEditChoices, nil)
-			return
-		}
+	next, err := c.WithMode(mode)
+	if errors.Is(err, domain.ErrQuizNeedsChoices) {
+		h.sessions.set(tgID, &session{State: stateEditChoices, CardID: c.ID, DeckID: d.ID})
+		h.send(ctx, b, chatID, config.AskEditChoices, nil)
+		return
 	}
-	if err := h.cards.Update(ctx, c); err != nil {
+	if err != nil {
+		h.send(ctx, b, chatID, config.TryAgain, nil)
+		return
+	}
+	if err := h.cards.Update(ctx, &next); err != nil {
 		slog.Error("Failed to update card", "error", err)
 		h.send(ctx, b, chatID, config.TryAgain, nil)
 		return
 	}
-	h.showCard(ctx, b, chatID, userID, c.ID)
+	h.showCard(ctx, b, chatID, userID, next.ID)
 }
 
 func (h *Bot) deleteCard(ctx context.Context, b *bot.Bot, chatID, userID, cardID int64) {
@@ -261,6 +300,21 @@ func (h *Bot) deleteCard(ctx context.Context, b *bot.Bot, chatID, userID, cardID
 		return
 	}
 	h.showDeck(ctx, b, chatID, userID, d.ID)
+}
+
+func (h *Bot) toggleCardReverse(ctx context.Context, b *bot.Bot, chatID, userID, cardID int64) {
+	c, _, err := h.cardOf(ctx, userID, cardID)
+	if err != nil {
+		h.send(ctx, b, chatID, config.SessionExpired, nil)
+		return
+	}
+	next := c.ToggleReverse()
+	if err := h.cards.Update(ctx, &next); err != nil {
+		slog.Error("Failed to update card", "error", err)
+		h.send(ctx, b, chatID, config.TryAgain, nil)
+		return
+	}
+	h.showCard(ctx, b, chatID, userID, next.ID)
 }
 
 func splitLines(s string) []string {

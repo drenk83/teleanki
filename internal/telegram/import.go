@@ -25,10 +25,11 @@ type importFile struct {
 }
 
 type importCard struct {
-	Front   string   `json:"front"`
-	Back    string   `json:"back"`
-	Mode    string   `json:"mode"`
-	Choices []string `json:"choices"`
+	Front      string   `json:"front"`
+	Back       string   `json:"back"`
+	Mode       string   `json:"mode"`
+	Choices    []string `json:"choices"`
+	Reversible bool     `json:"reversible"`
 }
 
 func (h *Bot) documentHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -111,15 +112,6 @@ func (h *Bot) finishImportAppend(ctx context.Context, b *bot.Bot, tgID, chatID, 
 		h.send(ctx, b, chatID, config.SessionExpired, nil)
 		return
 	}
-	for i, c := range sess.Import.Cards {
-		if c.Mode != domain.ModeQuiz {
-			continue
-		}
-		if err := domain.ValidateQuizChoices(c.Back, c.Choices); err != nil {
-			h.send(ctx, b, chatID, fmt.Sprintf(config.ImportBadData, fmt.Sprintf("карточка %d: некорректные варианты", i+1)), nil)
-			return
-		}
-	}
 	if err := h.cards.CreateMany(ctx, sess.Import.ExistingID, sess.Import.Cards); err != nil {
 		slog.Error("Failed to append cards", "error", err)
 		h.send(ctx, b, chatID, config.TryAgain, nil)
@@ -132,8 +124,11 @@ func (h *Bot) finishImportAppend(ctx context.Context, b *bot.Bot, tgID, chatID, 
 
 func (h *Bot) nextFreeDeckName(ctx context.Context, userID int64, original string) (string, error) {
 	for i := 2; i < 100; i++ {
-		name := fmt.Sprintf("%s (%d)", original, i)
-		_, err := h.decks.GetByUserAndName(ctx, userID, name)
+		name, err := domain.ConflictDeckName(original, i)
+		if err != nil {
+			return "", err
+		}
+		_, err = h.decks.GetByUserAndName(ctx, userID, name)
 		if errors.Is(err, storage.ErrNotFound) {
 			return name, nil
 		}
@@ -168,64 +163,53 @@ func (h *Bot) downloadFile(ctx context.Context, b *bot.Bot, fileID string) ([]by
 
 func parseImport(data []byte) (*importDraft, error) {
 	if len(data) > maxImportB {
-		return nil, errors.New("файл слишком большой")
+		return nil, errors.New(config.ImportTooLarge)
 	}
 	var raw importFile
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, errors.New("это не JSON")
+		return nil, errors.New(config.ImportBadJSON)
 	}
 	name, err := domain.NormalizeDeckName(raw.Deck)
 	if err != nil {
-		return nil, errors.New("некорректное имя колоды")
+		return nil, errors.New(config.ImportBadDeckName)
 	}
 	fillMode := domain.ModeRecall
 	if strings.TrimSpace(raw.DefaultMode) != "" {
 		m, err := domain.ParseMode(raw.DefaultMode)
 		if err != nil {
-			return nil, errors.New("некорректный default_mode")
+			return nil, errors.New(config.ImportBadDefaultMode)
 		}
 		fillMode = m
 	}
+	if len(raw.Cards) == 0 {
+		return nil, errors.New(config.ImportEmptyCards)
+	}
 	if len(raw.Cards) > maxImportN {
-		return nil, errors.New("слишком много карточек")
+		return nil, errors.New(config.ImportTooManyCards)
 	}
 	cards := make([]domain.Card, 0, len(raw.Cards))
 	for i, rc := range raw.Cards {
-		front, err := domain.NormalizeCardText(rc.Front)
-		if err != nil {
-			return nil, fmt.Errorf("карточка %d: некорректный вопрос", i+1)
-		}
-		back, err := domain.NormalizeCardText(rc.Back)
-		if err != nil {
-			return nil, fmt.Errorf("карточка %d: некорректный ответ", i+1)
-		}
 		cardMode := fillMode
 		if strings.TrimSpace(rc.Mode) != "" {
 			m, err := domain.ParseMode(rc.Mode)
 			if err != nil {
-				return nil, fmt.Errorf("карточка %d: некорректный режим", i+1)
+				return nil, fmt.Errorf(config.ImportBadCardMode, i+1)
 			}
 			cardMode = m
 		}
-		c := domain.Card{Front: front, Back: back, Mode: cardMode, Choices: []string{}}
-		if cardMode == domain.ModeQuiz {
-			choices := trimChoices(rc.Choices)
-			if err := domain.ValidateQuizChoices(back, choices); err != nil {
-				return nil, fmt.Errorf("карточка %d: некорректные варианты", i+1)
+		c, err := domain.NewCardWithChoices(0, rc.Front, rc.Back, cardMode, rc.Choices, rc.Reversible)
+		if err != nil {
+			if _, nerr := domain.NormalizeCardText(rc.Front); nerr != nil {
+				return nil, fmt.Errorf(config.ImportBadCardFront, i+1)
 			}
-			c.Choices = choices
+			if _, nerr := domain.NormalizeCardText(rc.Back); nerr != nil {
+				return nil, fmt.Errorf(config.ImportBadCardBack, i+1)
+			}
+			return nil, fmt.Errorf(config.ImportBadCardChoices, i+1)
 		}
 		cards = append(cards, c)
 	}
 	return &importDraft{Name: name, Cards: cards}, nil
-}
-
-func trimChoices(choices []string) []string {
-	out := make([]string, 0, len(choices))
-	for _, c := range choices {
-		out = append(out, strings.TrimSpace(c))
-	}
-	return out
 }
 
 func isJSONDoc(doc *models.Document) bool {

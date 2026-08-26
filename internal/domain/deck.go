@@ -25,3 +25,17 @@ func NormalizeDeckName(s string) (string, error) {
 	}
 	return name, nil
 }
+
+func ConflictDeckName(original string, n int) (string, error) {
+	suffix := fmt.Sprintf(" (%d)", n)
+	maxBase := MaxDeckNameRunes - utf8.RuneCountInString(suffix)
+	if maxBase < 1 {
+		return "", fmt.Errorf("deck name must be 1–%d characters", MaxDeckNameRunes)
+	}
+	base := strings.TrimSpace(original)
+	if utf8.RuneCountInString(base) > maxBase {
+		base = string([]rune(base)[:maxBase])
+		base = strings.TrimSpace(base)
+	}
+	return NormalizeDeckName(base + suffix)
+}
