@@ -14,4 +14,7 @@ type UserRepository interface {
 	AddReview(ctx context.Context, userID int64, today time.Time) (*domain.User, error)
 	LearnDeckIDs(ctx context.Context, userID int64) ([]int64, error)
 	ReplaceLearnDecks(ctx context.Context, userID int64, deckIDs []int64) error
+	SetNotify(ctx context.Context, userID int64, enabled bool, hour int) (*domain.User, error)
+	MarkNotified(ctx context.Context, userID int64, day time.Time) error
+	ListForNotify(ctx context.Context, hour int, day time.Time) ([]domain.User, error)
 }

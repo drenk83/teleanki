@@ -23,23 +23,26 @@ func (h *Bot) showDeckList(ctx context.Context, b *bot.Bot, chatID, userID int64
 		return
 	}
 	if len(decks) == 0 {
-		h.send(ctx, b, chatID, config.DeckEmptyList, kb(row(btn(config.BtnCreateDeck, "d:new"))))
+		h.send(ctx, b, chatID, config.DeckEmptyList, kb(
+			row(btn(config.BtnCreateDeck, "d:new")),
+			row(btn(config.BtnJoin, "d:join")),
+		))
 		return
 	}
 	chunk, page, pages := pageSlice(decks, page)
-	out := make([][]models.InlineKeyboardButton, 0, len(chunk)+3)
+	out := make([][]models.InlineKeyboardButton, 0, len(chunk)+4)
 	for _, d := range chunk {
-		out = append(out, row(btn(truncate(d.Name, 40), "d:open:"+strconv.FormatInt(d.ID, 10))))
+		out = append(out, row(btn(truncate(d.ListTitle(userID), 40), "d:open:"+strconv.FormatInt(d.ID, 10))))
 	}
 	if nav := pager(page, pages, "d:list"); len(nav) > 0 {
 		out = append(out, nav)
 	}
-	out = append(out, row(btn(config.BtnCreateDeck, "d:new")))
+	out = append(out, row(btn(config.BtnCreateDeck, "d:new"), btn(config.BtnJoin, "d:join")))
 	h.send(ctx, b, chatID, config.DeckListTitle, kb(out...))
 }
 
 func (h *Bot) showDeck(ctx context.Context, b *bot.Bot, chatID, userID, deckID int64) {
-	d, err := h.deckOf(ctx, userID, deckID)
+	d, err := h.deckSeen(ctx, userID, deckID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			h.send(ctx, b, chatID, config.SessionExpired, nil)
@@ -56,10 +59,23 @@ func (h *Bot) showDeck(ctx context.Context, b *bot.Bot, chatID, userID, deckID i
 		return
 	}
 	id := strconv.FormatInt(d.ID, 10)
+	if !d.OwnedBy(userID) {
+		owner := d.OwnerUsername
+		if owner == "" {
+			owner = "—"
+		}
+		h.send(ctx, b, chatID, fmt.Sprintf(config.ShareMemberView, d.Name, owner, n), kb(
+			row(btn(config.BtnCards, "d:cards:"+id)),
+			row(btn(config.BtnLeave, "d:leave:"+id)),
+			row(btn(config.BtnDecks, "d:list:0")),
+		))
+		return
+	}
 	text := fmt.Sprintf(config.DeckView, d.Name, n)
 	h.send(ctx, b, chatID, text, kb(
 		row(btn(config.BtnAddCard, "d:add:"+id), btn(config.BtnCards, "d:cards:"+id)),
 		row(btn(config.BtnRename, "d:ren:"+id), btn(config.BtnDelete, "d:del:"+id)),
+		row(btn(config.BtnShare, "d:share:"+id)),
 		row(btn(config.BtnDecks, "d:list:0")),
 	))
 }
@@ -123,6 +139,97 @@ func (h *Bot) deleteDeck(ctx context.Context, b *bot.Bot, chatID, userID, deckID
 		h.send(ctx, b, chatID, config.TryAgain, nil)
 		return
 	}
+	h.showDeckList(ctx, b, chatID, userID, 0)
+}
+
+func (h *Bot) shareDeck(ctx context.Context, b *bot.Bot, chatID, userID, deckID int64) {
+	d, err := h.deckOf(ctx, userID, deckID)
+	if err != nil {
+		h.send(ctx, b, chatID, config.SessionExpired, nil)
+		return
+	}
+	if d.ShareCode == "" {
+		code, err := domain.NewShareCode()
+		if err != nil {
+			slog.Error("Failed to make share code", "error", err)
+			h.send(ctx, b, chatID, config.TryAgain, nil)
+			return
+		}
+		if err := h.decks.SetShareCode(ctx, d.ID, code); err != nil {
+			slog.Error("Failed to save share code", "error", err)
+			h.send(ctx, b, chatID, config.TryAgain, nil)
+			return
+		}
+		d.ShareCode = code
+	}
+	id := strconv.FormatInt(d.ID, 10)
+	h.send(ctx, b, chatID, fmt.Sprintf(config.ShareShow, d.Name, d.ShareCode), kb(
+		row(btn(config.BtnShareRotate, "d:rotate:"+id)),
+		row(btn(config.BtnBackToDeck, "d:open:"+id)),
+	))
+}
+
+func (h *Bot) rotateShare(ctx context.Context, b *bot.Bot, chatID, userID, deckID int64) {
+	if _, err := h.deckOf(ctx, userID, deckID); err != nil {
+		h.send(ctx, b, chatID, config.SessionExpired, nil)
+		return
+	}
+	code, err := domain.NewShareCode()
+	if err != nil {
+		h.send(ctx, b, chatID, config.TryAgain, nil)
+		return
+	}
+	if err := h.decks.SetShareCode(ctx, deckID, code); err != nil {
+		slog.Error("Failed to rotate share code", "error", err)
+		h.send(ctx, b, chatID, config.TryAgain, nil)
+		return
+	}
+	h.shareDeck(ctx, b, chatID, userID, deckID)
+}
+
+func (h *Bot) beginJoin(ctx context.Context, b *bot.Bot, tgID, chatID int64) {
+	h.sessions.set(tgID, &session{State: stateJoinCode})
+	h.send(ctx, b, chatID, config.AskShareCode, nil)
+}
+
+func (h *Bot) joinFromText(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, text string) {
+	code, err := domain.NormalizeShareCode(text)
+	if err != nil {
+		h.send(ctx, b, chatID, config.ShareBadCode+"\n"+config.AskShareCode, nil)
+		return
+	}
+	d, err := h.decks.GetByShareCode(ctx, code)
+	if err != nil {
+		h.send(ctx, b, chatID, config.ShareBadCode+"\n"+config.AskShareCode, nil)
+		return
+	}
+	if d.OwnedBy(userID) {
+		h.sessions.clear(tgID)
+		h.send(ctx, b, chatID, config.ShareOwnDeck, nil)
+		return
+	}
+	if err := h.decks.Join(ctx, userID, d.ID); err != nil {
+		slog.Error("Failed to join deck", "error", err)
+		h.send(ctx, b, chatID, config.TryAgain, nil)
+		return
+	}
+	h.sessions.clear(tgID)
+	h.send(ctx, b, chatID, fmt.Sprintf(config.ShareJoined, d.Name), nil)
+	h.showDeck(ctx, b, chatID, userID, d.ID)
+}
+
+func (h *Bot) leaveDeck(ctx context.Context, b *bot.Bot, chatID, userID, deckID int64) {
+	d, err := h.deckSeen(ctx, userID, deckID)
+	if err != nil || d.OwnedBy(userID) {
+		h.send(ctx, b, chatID, config.SessionExpired, nil)
+		return
+	}
+	if err := h.decks.Leave(ctx, userID, deckID); err != nil {
+		slog.Error("Failed to leave deck", "error", err)
+		h.send(ctx, b, chatID, config.TryAgain, nil)
+		return
+	}
+	h.send(ctx, b, chatID, config.ShareLeft, nil)
 	h.showDeckList(ctx, b, chatID, userID, 0)
 }
 

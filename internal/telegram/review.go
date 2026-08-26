@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"html"
 	"log/slog"
 	"strconv"
 	"time"
@@ -138,7 +139,11 @@ func (h *Bot) renderLearnView(ctx context.Context, b *bot.Bot, tgID, chatID int6
 				dailyLimit = u.DailyLimit
 			}
 		}
-		h.send(ctx, b, chatID, fmt.Sprintf(config.DailyLimitReached, dailyLimit), nil)
+		text := fmt.Sprintf(config.DailyLimitReached, dailyLimit)
+		if notice != "" {
+			text = notice + "\n\n" + text
+		}
+		h.send(ctx, b, chatID, text, nil)
 		return
 	case learn.KindDone:
 		h.sessions.clear(tgID)
@@ -151,9 +156,13 @@ func (h *Bot) renderLearnView(ctx context.Context, b *bot.Bot, tgID, chatID int6
 	}
 
 	sess := &session{Learn: &s}
-	header := fmt.Sprintf(config.ReviewProgress, view.Index, view.Total, view.DeckName)
+	header := fmt.Sprintf(config.ReviewProgress, view.Index, view.Total, html.EscapeString(view.DeckName))
 	if s.Infinite {
-		header = fmt.Sprintf(config.ReviewRandom, view.DeckName)
+		header = fmt.Sprintf(config.ReviewRandom, html.EscapeString(view.DeckName))
+	}
+	img := ""
+	if s.Active() {
+		img = s.Items[s.Index].Card.PromptImage(s.Flipped)
 	}
 	if view.Kind == learn.KindReveal {
 		text := clip(view.Prompt, 1200) + "\n\n" + clip(view.Answer, 1200)
@@ -161,8 +170,25 @@ func (h *Bot) renderLearnView(ctx context.Context, b *bot.Bot, tgID, chatID int6
 		if s.Infinite {
 			markup = nextKeyboard()
 		}
+		if s.Active() {
+			if a := s.Items[s.Index].Card.AnswerImage(s.Flipped); a != "" {
+				img = a
+			}
+		}
 		h.sessions.set(tgID, sess)
-		h.send(ctx, b, chatID, text, markup)
+		h.sendMedia(ctx, b, chatID, text, img, markup)
+		return
+	}
+	if view.Kind == learn.KindResult {
+		text := gradeNotice(view)
+		if view.Grade == learn.GradeCorrect && view.Answer != "" {
+			if text != "" {
+				text += "\n\n"
+			}
+			text += clip(view.Answer, 1200)
+		}
+		h.sessions.set(tgID, sess)
+		h.send(ctx, b, chatID, text, nextKeyboard())
 		return
 	}
 
@@ -174,17 +200,17 @@ func (h *Bot) renderLearnView(ctx context.Context, b *bot.Bot, tgID, chatID int6
 	case domain.ModeQuiz:
 		rows := make([][]models.InlineKeyboardButton, 0, len(view.Choices))
 		for i, label := range view.Choices {
-			rows = append(rows, row(btn(truncate(label, 60), "r:q:"+strconv.Itoa(i))))
+			rows = append(rows, row(btn(truncate(domain.PlainCardText(label), 60), "r:q:"+strconv.Itoa(i))))
 		}
 		h.sessions.set(tgID, sess)
-		h.send(ctx, b, chatID, text, kb(rows...))
+		h.sendMedia(ctx, b, chatID, text, img, kb(rows...))
 	case domain.ModeTypein:
 		sess.State = stateTypein
 		h.sessions.set(tgID, sess)
-		h.send(ctx, b, chatID, text+"\n\n"+config.TypeinPrompt, nil)
+		h.sendMedia(ctx, b, chatID, text+"\n\n"+config.TypeinPrompt, img, nil)
 	default:
 		h.sessions.set(tgID, sess)
-		h.send(ctx, b, chatID, text, kb(row(btn(config.BtnShow, "r:show"))))
+		h.sendMedia(ctx, b, chatID, text, img, kb(row(btn(config.BtnShow, "r:show"))))
 	}
 }
 

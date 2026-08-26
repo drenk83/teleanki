@@ -30,6 +30,10 @@ func (h *Bot) handleText(ctx context.Context, b *bot.Bot, tgID, chatID, userID i
 		h.reviewTypein(ctx, b, tgID, chatID, userID, text)
 	case stateDailyLimit:
 		h.setDailyLimitFromText(ctx, b, tgID, chatID, userID, text)
+	case stateNotifyHour:
+		h.setNotifyHourFromText(ctx, b, tgID, chatID, userID, text)
+	case stateJoinCode:
+		h.joinFromText(ctx, b, tgID, chatID, userID, text)
 	case stateCardMode, stateCardReverse, stateImportConflict:
 		h.send(ctx, b, chatID, config.UseButtons, nil)
 	default:

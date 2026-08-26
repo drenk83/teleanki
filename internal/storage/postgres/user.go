@@ -11,8 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const userCols = `id, telegram_id, username, daily_limit, reviews_today, reviews_on_date, created_at, updated_at`
-
 type UserRepository struct {
 	pool *pgxpool.Pool
 }
@@ -63,7 +61,7 @@ RETURNING `+userCols, userID, limit))
 }
 
 func (r *UserRepository) AddReview(ctx context.Context, userID int64, today time.Time) (*domain.User, error) {
-	day := utcDate(today)
+	day := domain.DayDate(today)
 	u, err := scanUser(r.pool.QueryRow(ctx, `
 UPDATE users SET
     reviews_on_date = $2,
@@ -109,9 +107,58 @@ func (r *UserRepository) ReplaceLearnDecks(ctx context.Context, userID int64, de
 	if len(deckIDs) > 0 {
 		if _, err := tx.Exec(ctx, `
 INSERT INTO user_learn_decks (user_id, deck_id)
-SELECT $1, id FROM decks WHERE user_id = $1 AND id = ANY($2)`, userID, deckIDs); err != nil {
+SELECT $1, id FROM decks
+WHERE id = ANY($2)
+  AND (user_id = $1 OR id IN (SELECT deck_id FROM deck_members WHERE user_id = $1))`, userID, deckIDs); err != nil {
 			return err
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+func (r *UserRepository) SetNotify(ctx context.Context, userID int64, enabled bool, hour int) (*domain.User, error) {
+	u, err := scanUser(r.pool.QueryRow(ctx, `
+UPDATE users SET notify_enabled = $2, notify_hour = $3, updated_at = now()
+WHERE id = $1
+RETURNING `+userCols, userID, enabled, hour))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, storage.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (r *UserRepository) MarkNotified(ctx context.Context, userID int64, day time.Time) error {
+	tag, err := r.pool.Exec(ctx, `UPDATE users SET notify_on_date = $2, updated_at = now() WHERE id = $1`, userID, domain.DayDate(day))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return storage.ErrNotFound
+	}
+	return nil
+}
+
+func (r *UserRepository) ListForNotify(ctx context.Context, hour int, day time.Time) ([]domain.User, error) {
+	rows, err := r.pool.Query(ctx, `
+SELECT `+userCols+`
+FROM users
+WHERE notify_enabled = true
+  AND notify_hour = $1
+  AND notify_on_date <> $2`, hour, domain.DayDate(day))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }

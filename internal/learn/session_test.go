@@ -107,7 +107,7 @@ func TestStartDueSkipsInvalidBeforeCap(t *testing.T) {
 	rng := &stubRNG{noswap: true}
 	items := make([]Item, SessionLimit+1)
 	for i := range items {
-		items[i] = quizItem(int64(i+1), "да", []string{"нет"})
+		items[i] = quizItem(int64(i+1), "да", []string{})
 	}
 	items[SessionLimit] = recallItem(99, "f", "b")
 	s, v := StartDue(items, SessionLimit+10, rng)
@@ -158,7 +158,10 @@ func TestDuePersistsAndAgainLeavesSession(t *testing.T) {
 		t.Fatalf("again: %#v", persist.Review)
 	}
 	if v.Kind != KindPrompt || s.Items[s.Index].Card.ID != 8 {
-		t.Fatalf("must advance, not return card 7: idx=%d id=%d kind=%v", s.Index, s.Items[s.Index].Card.ID, v.Kind)
+		t.Fatalf("next after again: idx=%d id=%d kind=%v", s.Index, s.Items[s.Index].Card.ID, v.Kind)
+	}
+	if s.Items[len(s.Items)-1].Card.ID != 7 || s.Items[len(s.Items)-1].Review.Repetitions != 0 {
+		t.Fatalf("card 7 must sit at end with again state: %#v", s.Items[len(s.Items)-1].Review)
 	}
 }
 
@@ -166,14 +169,15 @@ func TestQuizGoodAndWrong(t *testing.T) {
 	t.Parallel()
 	rng := &stubRNG{noswap: true, seq: []int{0, 0, 0, 0, 0, 0, 0, 0}}
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
-	item := quizItem(1, "да", []string{"да", "нет"})
+	item := quizItem(1, "да", []string{"нет"})
 	s, v := StartDue([]Item{item, recallItem(2, "x", "y")}, 20, rng)
 	if v.Kind != KindPrompt || v.Mode != domain.ModeQuiz || len(s.QuizPerm) != 2 {
 		t.Fatalf("prompt: %#v perm=%v", v, s.QuizPerm)
 	}
+	buttons := item.Card.QuizButtons()
 	backIdx := -1
 	for i, p := range s.QuizPerm {
-		if item.Card.Choices[p] == "да" {
+		if buttons[p] == "да" {
 			backIdx = i
 		}
 	}
@@ -225,11 +229,12 @@ func TestQuizPickFoldMatch(t *testing.T) {
 	t.Parallel()
 	rng := &stubRNG{noswap: true}
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
-	item := quizItem(1, "верный", []string{"Верный", "нет"})
+	item := quizItem(1, "верный", []string{"нет"})
 	s, _ := StartDue([]Item{item}, 20, rng)
+	buttons := item.Card.QuizButtons()
 	idx := -1
 	for i, p := range s.QuizPerm {
-		if item.Card.Choices[p] == "Верный" {
+		if domain.MatchTypein(buttons[p], "верный") {
 			idx = i
 		}
 	}
@@ -245,7 +250,7 @@ func TestQuizPickFoldMatch(t *testing.T) {
 func TestShowOnlyRecall(t *testing.T) {
 	t.Parallel()
 	rng := &stubRNG{noswap: true}
-	s, _ := StartDue([]Item{quizItem(1, "да", []string{"да", "нет"})}, 20, rng)
+	s, _ := StartDue([]Item{quizItem(1, "да", []string{"нет"})}, 20, rng)
 	_, _, ok := Show(s)
 	if ok {
 		t.Fatal("quiz must not reveal")
@@ -259,7 +264,7 @@ func TestShowOnlyRecall(t *testing.T) {
 
 func TestQuizNeverFlipped(t *testing.T) {
 	t.Parallel()
-	item := quizItem(1, "да", []string{"да", "нет"})
+	item := quizItem(1, "да", []string{"нет"})
 	item.Card.Reversible = true
 	s, v := StartDue([]Item{item}, 20, &stubRNG{seq: []int{1, 1, 1, 1}, noswap: true})
 	if s.Flipped || v.Prompt != "q" {
@@ -269,7 +274,7 @@ func TestQuizNeverFlipped(t *testing.T) {
 
 func TestAllInvalidQuizEmpty(t *testing.T) {
 	t.Parallel()
-	bad := quizItem(1, "да", []string{"нет"})
+	bad := quizItem(1, "да", []string{})
 	_, v := StartDue([]Item{bad}, 20, &stubRNG{noswap: true})
 	if v.Kind != KindEmpty {
 		t.Fatalf("all invalid: %v", v.Kind)
@@ -283,9 +288,104 @@ func TestAllInvalidQuizEmpty(t *testing.T) {
 func TestSkipInvalidQuiz(t *testing.T) {
 	t.Parallel()
 	rng := &stubRNG{noswap: true}
-	bad := quizItem(1, "да", []string{"нет"})
+	bad := quizItem(1, "да", []string{})
 	s, v := StartDue([]Item{bad, recallItem(2, "f", "b")}, 20, rng)
 	if v.Kind != KindPrompt || s.Items[s.Index].Card.ID != 2 {
 		t.Fatalf("should skip bad quiz: idx=%d kind=%v", s.Index, v.Kind)
+	}
+}
+
+func TestRandomQuizHoldsResult(t *testing.T) {
+	t.Parallel()
+	rng := &stubRNG{noswap: true}
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	item := quizItem(1, "да", []string{"нет"})
+	s, _ := StartRandom([]Item{item, recallItem(2, "x", "y")}, rng)
+	buttons := item.Card.QuizButtons()
+	idx := 0
+	if buttons[s.QuizPerm[0]] != "да" {
+		idx = 1
+	}
+	index := s.Index
+	s, persist, v, ok := QuizPick(s, idx, now, rng)
+	if !ok || persist != nil || v.Kind != KindResult || v.Grade != GradeCorrect {
+		t.Fatalf("result: ok=%v persist=%v kind=%v grade=%v", ok, persist != nil, v.Kind, v.Grade)
+	}
+	if !s.Shown || s.Index != index || v.Answer != "да" {
+		t.Fatalf("must hold: shown=%v idx=%d answer=%q", s.Shown, s.Index, v.Answer)
+	}
+	if _, _, _, ok = QuizPick(s, idx, now, rng); ok {
+		t.Fatal("second pick")
+	}
+	s, v = Next(s, rng)
+	if v.Kind != KindPrompt || s.Items[s.Index].Card.ID != 2 {
+		t.Fatalf("next: kind=%v id=%d", v.Kind, s.Items[s.Index].Card.ID)
+	}
+}
+
+func TestRandomTypeinHoldsResult(t *testing.T) {
+	t.Parallel()
+	rng := &stubRNG{seq: []int{1}, noswap: true}
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	s, _ := StartRandom([]Item{typeinItem(1, "hello", "привет", true)}, rng)
+	index := s.Index
+	s, persist, v, ok := Typein(s, "нет", now, rng)
+	if !ok || persist != nil || v.Kind != KindResult || v.Grade != GradeWrong {
+		t.Fatalf("result: ok=%v persist=%v kind=%v grade=%v", ok, persist != nil, v.Kind, v.Grade)
+	}
+	if !s.Shown || s.Index != index || v.Answer != "hello" || v.Notice != "hello" {
+		t.Fatalf("must hold: shown=%v idx=%d answer=%q notice=%q", s.Shown, s.Index, v.Answer, v.Notice)
+	}
+	if _, _, _, ok = Typein(s, "hello", now, rng); ok {
+		t.Fatal("second typein")
+	}
+}
+
+func TestAgainLastWins(t *testing.T) {
+	t.Parallel()
+	rng := &stubRNG{noswap: true}
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	s, _ := StartDue([]Item{recallItem(7, "f", "b"), recallItem(8, "c", "d")}, 20, rng)
+	s, _, _ = Show(s)
+	s, _, _ = Rate(s, scheduler.RatingAgain, now, GradeNone, "", rng)
+	s, _, ok := Show(s)
+	if !ok || s.Items[s.Index].Card.ID != 8 {
+		t.Fatal("card 8")
+	}
+	s, _, _ = Rate(s, scheduler.RatingGood, now, GradeNone, "", rng)
+	if s.Items[s.Index].Card.ID != 7 {
+		t.Fatalf("back to 7: id=%d", s.Items[s.Index].Card.ID)
+	}
+	s, _, _ = Show(s)
+	_, persist, _ := Rate(s, scheduler.RatingGood, now, GradeNone, "", rng)
+	if persist == nil || persist.Review.Repetitions != 1 {
+		t.Fatalf("good after again: %#v", persist)
+	}
+	if persist.Review.Easiness >= 2.5 {
+		t.Fatalf("last rating must start from again EF: %v", persist.Review.Easiness)
+	}
+}
+
+func TestAgainLastCardReturns(t *testing.T) {
+	t.Parallel()
+	rng := &stubRNG{noswap: true}
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	s, _ := StartDue([]Item{recallItem(1, "f", "b")}, 20, rng)
+	s, _, _ = Show(s)
+	s, persist, v := Rate(s, scheduler.RatingAgain, now, GradeNone, "", rng)
+	if persist == nil || v.Kind != KindPrompt || s.Items[s.Index].Card.ID != 1 {
+		t.Fatalf("same card: kind=%v id=%d persist=%v", v.Kind, s.Items[s.Index].Card.ID, persist != nil)
+	}
+}
+
+func TestAgainHitsDailyLimit(t *testing.T) {
+	t.Parallel()
+	rng := &stubRNG{noswap: true}
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	s, _ := StartDue([]Item{recallItem(1, "f", "b"), recallItem(2, "c", "d")}, 1, rng)
+	s, _, _ = Show(s)
+	_, persist, v := Rate(s, scheduler.RatingAgain, now, GradeNone, "", rng)
+	if persist == nil || v.Kind != KindLimit {
+		t.Fatalf("limit after last remaining: kind=%v persist=%v", v.Kind, persist != nil)
 	}
 }

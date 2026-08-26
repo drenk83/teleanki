@@ -22,13 +22,21 @@ func TestParseImportBadJSON(t *testing.T) {
 	}
 }
 
-func TestParseImportQuizFoldBack(t *testing.T) {
+func TestParseImportQuizBackInChoices(t *testing.T) {
 	t.Parallel()
-	got, err := parseImport([]byte(`{"deck":"Колода","cards":[{"front":"q","back":"верный","mode":"quiz","choices":["Верный","нет"]}]}`))
+	_, err := parseImport([]byte(`{"deck":"Колода","cards":[{"front":"q","back":"верный","mode":"quiz","choices":["Верный","нет"]}]}`))
+	if err == nil {
+		t.Fatal("expected error when back is in choices")
+	}
+}
+
+func TestParseImportQuizDistractors(t *testing.T) {
+	t.Parallel()
+	got, err := parseImport([]byte(`{"deck":"Колода","cards":[{"front":"q","back":"верный","mode":"quiz","choices":["нет","может"]}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Cards[0].Back != "верный" || len(got.Cards[0].Choices) != 2 {
+	if got.Cards[0].Back != "верный" || len(got.Cards[0].Choices) != 2 || got.Cards[0].Choices[0] != "нет" {
 		t.Fatalf("%#v", got.Cards[0])
 	}
 }

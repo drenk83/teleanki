@@ -11,6 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+const cardCols = `id, deck_id, front, back, front_image, back_image, mode, choices, reversible, created_at, updated_at`
+
+const deckCols = `id, user_id, name, COALESCE(share_code, ''), created_at, updated_at`
+
+const userCols = `id, telegram_id, username, daily_limit, reviews_today, reviews_on_date, notify_enabled, notify_hour, notify_on_date, created_at, updated_at`
+
+const dueItemCols = `
+    c.id, c.deck_id, c.front, c.back, c.front_image, c.back_image, c.mode, c.choices, c.reversible, c.created_at, c.updated_at,
+    d.id, d.user_id, d.name, COALESCE(d.share_code, ''), d.created_at, d.updated_at,
+    r.user_id, r.card_id, r.easiness, r.interval_days, r.repetitions, r.due_at, r.updated_at`
+
 type querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
@@ -24,16 +35,18 @@ func insertCardWithReview(ctx context.Context, q querier, deckID int64, card dom
 		card.Reversible = false
 	}
 	const cardSQL = `
-INSERT INTO cards (deck_id, front, back, mode, choices, reversible)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, deck_id, front, back, mode, choices, reversible, created_at, updated_at`
+INSERT INTO cards (deck_id, front, back, front_image, back_image, mode, choices, reversible)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING ` + cardCols
 
 	var mode string
-	err := q.QueryRow(ctx, cardSQL, deckID, card.Front, card.Back, string(card.Mode), card.Choices, card.Reversible).Scan(
+	err := q.QueryRow(ctx, cardSQL, deckID, card.Front, card.Back, card.FrontImage, card.BackImage, string(card.Mode), card.Choices, card.Reversible).Scan(
 		&card.ID,
 		&card.DeckID,
 		&card.Front,
 		&card.Back,
+		&card.FrontImage,
+		&card.BackImage,
 		&mode,
 		&card.Choices,
 		&card.Reversible,
@@ -47,9 +60,14 @@ RETURNING id, deck_id, front, back, mode, choices, reversible, created_at, updat
 
 	st := scheduler.NewState(time.Now())
 	const reviewSQL = `
-INSERT INTO reviews (card_id, easiness, interval_days, repetitions, due_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, now())`
-	if _, err := q.Exec(ctx, reviewSQL, card.ID, st.Easiness, st.IntervalDays, st.Repetitions, st.DueAt); err != nil {
+INSERT INTO reviews (user_id, card_id, easiness, interval_days, repetitions, due_at, updated_at)
+SELECT u.uid, $1, $2, $3, $4, $5, now()
+FROM (
+    SELECT user_id AS uid FROM decks WHERE id = $6
+    UNION
+    SELECT user_id FROM deck_members WHERE deck_id = $6
+) u`
+	if _, err := q.Exec(ctx, reviewSQL, card.ID, st.Easiness, st.IntervalDays, st.Repetitions, st.DueAt, deckID); err != nil {
 		return domain.Card{}, err
 	}
 	if card.Choices == nil {
@@ -66,6 +84,8 @@ func scanCard(row pgx.Row) (domain.Card, error) {
 		&c.DeckID,
 		&c.Front,
 		&c.Back,
+		&c.FrontImage,
+		&c.BackImage,
 		&mode,
 		&c.Choices,
 		&c.Reversible,
@@ -90,6 +110,8 @@ func scanDueItem(row pgx.Row) (storage.DueItem, error) {
 		&item.Card.DeckID,
 		&item.Card.Front,
 		&item.Card.Back,
+		&item.Card.FrontImage,
+		&item.Card.BackImage,
 		&cardMode,
 		&item.Card.Choices,
 		&item.Card.Reversible,
@@ -98,8 +120,10 @@ func scanDueItem(row pgx.Row) (storage.DueItem, error) {
 		&item.Deck.ID,
 		&item.Deck.UserID,
 		&item.Deck.Name,
+		&item.Deck.ShareCode,
 		&item.Deck.CreatedAt,
 		&item.Deck.UpdatedAt,
+		&item.Review.UserID,
 		&item.Review.CardID,
 		&item.Review.Easiness,
 		&item.Review.IntervalDays,
@@ -123,6 +147,7 @@ func scanDeck(row pgx.Row) (domain.Deck, error) {
 		&d.ID,
 		&d.UserID,
 		&d.Name,
+		&d.ShareCode,
 		&d.CreatedAt,
 		&d.UpdatedAt,
 	)
@@ -141,6 +166,9 @@ func scanUser(row pgx.Row) (domain.User, error) {
 		&u.DailyLimit,
 		&u.ReviewsToday,
 		&u.ReviewsOnDate,
+		&u.NotifyEnabled,
+		&u.NotifyHour,
+		&u.NotifyOnDate,
 		&u.CreatedAt,
 		&u.UpdatedAt,
 	)
@@ -148,9 +176,4 @@ func scanUser(row pgx.Row) (domain.User, error) {
 		return domain.User{}, err
 	}
 	return u, nil
-}
-
-func utcDate(t time.Time) time.Time {
-	y, m, d := t.UTC().Date()
-	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }

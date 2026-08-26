@@ -22,7 +22,7 @@ func (r *DeckRepository) Create(ctx context.Context, userID int64, name string) 
 	const q = `
 INSERT INTO decks (user_id, name)
 VALUES ($1, $2)
-RETURNING id, user_id, name, created_at, updated_at`
+RETURNING ` + deckCols
 
 	d, err := scanDeck(r.pool.QueryRow(ctx, q, userID, name))
 	if err != nil {
@@ -41,7 +41,7 @@ func (r *DeckRepository) CreateWithCards(ctx context.Context, userID int64, name
 	const q = `
 INSERT INTO decks (user_id, name)
 VALUES ($1, $2)
-RETURNING id, user_id, name, created_at, updated_at`
+RETURNING ` + deckCols
 
 	d, err := scanDeck(tx.QueryRow(ctx, q, userID, name))
 	if err != nil {
@@ -60,11 +60,13 @@ RETURNING id, user_id, name, created_at, updated_at`
 
 func (r *DeckRepository) GetByID(ctx context.Context, id int64) (*domain.Deck, error) {
 	const q = `
-SELECT id, user_id, name, created_at, updated_at
-FROM decks
-WHERE id = $1`
+SELECT d.id, d.user_id, d.name, COALESCE(d.share_code, ''), d.created_at, d.updated_at, u.username
+FROM decks d
+JOIN users u ON u.id = d.user_id
+WHERE d.id = $1`
 
-	d, err := scanDeck(r.pool.QueryRow(ctx, q, id))
+	var d domain.Deck
+	err := r.pool.QueryRow(ctx, q, id).Scan(&d.ID, &d.UserID, &d.Name, &d.ShareCode, &d.CreatedAt, &d.UpdatedAt, &d.OwnerUsername)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, storage.ErrNotFound
 	}
@@ -76,7 +78,7 @@ WHERE id = $1`
 
 func (r *DeckRepository) GetByUserAndName(ctx context.Context, userID int64, name string) (*domain.Deck, error) {
 	const q = `
-SELECT id, user_id, name, created_at, updated_at
+SELECT ` + deckCols + `
 FROM decks
 WHERE user_id = $1 AND name = $2`
 
@@ -92,10 +94,12 @@ WHERE user_id = $1 AND name = $2`
 
 func (r *DeckRepository) ListByUser(ctx context.Context, userID int64) ([]domain.Deck, error) {
 	const q = `
-SELECT id, user_id, name, created_at, updated_at
-FROM decks
-WHERE user_id = $1
-ORDER BY name`
+SELECT d.id, d.user_id, d.name, COALESCE(d.share_code, ''), d.created_at, d.updated_at, u.username
+FROM decks d
+JOIN users u ON u.id = d.user_id
+WHERE d.user_id = $1
+   OR EXISTS (SELECT 1 FROM deck_members m WHERE m.deck_id = d.id AND m.user_id = $1)
+ORDER BY (d.user_id = $1) DESC, d.name`
 
 	rows, err := r.pool.Query(ctx, q, userID)
 	if err != nil {
@@ -105,13 +109,85 @@ ORDER BY name`
 
 	var out []domain.Deck
 	for rows.Next() {
-		d, err := scanDeck(rows)
-		if err != nil {
+		var d domain.Deck
+		if err := rows.Scan(&d.ID, &d.UserID, &d.Name, &d.ShareCode, &d.CreatedAt, &d.UpdatedAt, &d.OwnerUsername); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+func (r *DeckRepository) GetByShareCode(ctx context.Context, code string) (*domain.Deck, error) {
+	const q = `
+SELECT ` + deckCols + `
+FROM decks
+WHERE share_code = $1`
+	d, err := scanDeck(r.pool.QueryRow(ctx, q, code))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, storage.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+func (r *DeckRepository) SetShareCode(ctx context.Context, deckID int64, code string) error {
+	var arg any
+	if code == "" {
+		arg = nil
+	} else {
+		arg = code
+	}
+	tag, err := r.pool.Exec(ctx, `UPDATE decks SET share_code = $2, updated_at = now() WHERE id = $1`, deckID, arg)
+	if err != nil {
+		return mapErr(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return storage.ErrNotFound
+	}
+	return nil
+}
+
+func (r *DeckRepository) Join(ctx context.Context, userID, deckID int64) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+INSERT INTO deck_members (deck_id, user_id)
+VALUES ($1, $2)
+ON CONFLICT DO NOTHING`, deckID, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO reviews (user_id, card_id, easiness, interval_days, repetitions, due_at, updated_at)
+SELECT $2, c.id, 2.5, 0, 0, now(), now()
+FROM cards c
+WHERE c.deck_id = $1
+ON CONFLICT (user_id, card_id) DO NOTHING`, deckID, userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (r *DeckRepository) Leave(ctx context.Context, userID, deckID int64) error {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM deck_members WHERE deck_id = $1 AND user_id = $2`, deckID, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return storage.ErrNotFound
+	}
+	return nil
+}
+
+func (r *DeckRepository) IsMember(ctx context.Context, userID, deckID int64) (bool, error) {
+	var n int
+	err := r.pool.QueryRow(ctx, `SELECT count(*) FROM deck_members WHERE deck_id = $1 AND user_id = $2`, deckID, userID).Scan(&n)
+	return n > 0, err
 }
 
 func (r *DeckRepository) Update(ctx context.Context, deck *domain.Deck) error {

@@ -7,6 +7,7 @@ import (
 	"os/signal"
 
 	"github.com/drenk83/teleanki/internal/config"
+	"github.com/drenk83/teleanki/internal/storage"
 	"github.com/drenk83/teleanki/internal/storage/postgres"
 	tg "github.com/drenk83/teleanki/internal/telegram"
 	"github.com/joho/godotenv"
@@ -41,7 +42,7 @@ func main() {
 	cards := postgres.NewCardRepository(db)
 	reviews := postgres.NewReviewRepository(db)
 
-	b, err := tg.CreateBot(cfg.TGToken, users, decks, cards, reviews)
+	b, err := tg.CreateBot(ctx, cfg.TGToken, users, decks, cards, reviews, storage.ImageStore{Dir: cfg.ImagesDir})
 	if err != nil {
 		slog.Error("Failed to create bot", "error", err)
 		os.Exit(1)

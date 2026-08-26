@@ -59,7 +59,7 @@ func (h *Bot) guardMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
 				return
 			}
 			ctx = withUI(ctx, update.CallbackQuery.From.ID, false)
-			h.bindUI(update.CallbackQuery.From.ID, msg.Chat.ID, msg.ID)
+			h.bindCallbackUI(update.CallbackQuery.From.ID, msg)
 			if _, err := h.users.UpsertByTelegramID(ctx, update.CallbackQuery.From.ID, update.CallbackQuery.From.Username); err != nil {
 				slog.Error("Failed to upsert user", "error", err, "telegram_id", update.CallbackQuery.From.ID)
 				h.ack(ctx, b, update.CallbackQuery.ID)

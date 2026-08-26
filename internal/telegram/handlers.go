@@ -77,5 +77,11 @@ func (h *Bot) textHandler(ctx context.Context, b *bot.Bot, update *models.Update
 		h.send(ctx, b, update.Message.Chat.ID, config.TryAgain, nil)
 		return
 	}
-	h.handleText(ctx, b, update.Message.From.ID, update.Message.Chat.ID, user.ID, update.Message.Text)
+	text := update.Message.Text
+	sess := h.sessions.get(update.Message.From.ID)
+	switch sess.State {
+	case stateCardFront, stateCardBack, stateEditFront, stateEditBack:
+		text = formattedCardText(update.Message)
+	}
+	h.handleText(ctx, b, update.Message.From.ID, update.Message.Chat.ID, user.ID, text)
 }

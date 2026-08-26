@@ -24,6 +24,8 @@ const (
 	stateTypein         state = "typein"
 	stateImportConflict state = "import_conflict"
 	stateDailyLimit     state = "daily_limit"
+	stateNotifyHour     state = "notify_hour"
+	stateJoinCode       state = "join_code"
 )
 
 const (
@@ -38,6 +40,8 @@ type session struct {
 	CardID          int64
 	DraftFront      string
 	DraftBack       string
+	DraftFrontImage string
+	DraftBackImage  string
 	DraftMode       domain.Mode
 	DraftReversible bool
 	Learn           *learn.Session

@@ -32,9 +32,23 @@ func withNoMenu(ctx context.Context) context.Context {
 }
 
 func (h *Bot) bindUI(tgID, chatID int64, msgID int) {
+	h.bindUIMedia(tgID, chatID, msgID, "")
+}
+
+func (h *Bot) bindUIMedia(tgID, chatID int64, msgID int, image string) {
 	h.uiMu.Lock()
-	h.ui[tgID] = uiMsg{chatID: chatID, msgID: msgID}
+	h.ui[tgID] = uiMsg{chatID: chatID, msgID: msgID, image: image}
 	h.uiMu.Unlock()
+}
+
+func (h *Bot) bindCallbackUI(tgID int64, msg *models.Message) {
+	image := ""
+	if prev, ok := h.lastUI(tgID); ok && prev.msgID == msg.ID {
+		image = prev.image
+	} else if len(msg.Photo) > 0 {
+		image = "_"
+	}
+	h.bindUIMedia(tgID, msg.Chat.ID, msg.ID, image)
 }
 
 func (h *Bot) lastUI(tgID int64) (uiMsg, bool) {
@@ -54,11 +68,7 @@ func (h *Bot) send(ctx context.Context, b *bot.Bot, chatID int64, text string, m
 		}
 	}
 
-	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:      chatID,
-		Text:        text,
-		ReplyMarkup: markup,
-	})
+	msg, err := sendHTML(ctx, b, chatID, text, markup)
 	if err != nil {
 		slog.Error("Failed to send message", "error", err)
 		return
@@ -68,22 +78,54 @@ func (h *Bot) send(ctx context.Context, b *bot.Bot, chatID int64, text string, m
 	}
 }
 
-func (h *Bot) tryEdit(ctx context.Context, b *bot.Bot, tgID, chatID int64, text string, markup models.ReplyMarkup) bool {
-	ref, ok := h.lastUI(tgID)
-	if !ok || ref.msgID == 0 || ref.chatID != chatID {
-		return false
-	}
-	_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+func sendHTML(ctx context.Context, b *bot.Bot, chatID int64, text string, markup models.ReplyMarkup) (*models.Message, error) {
+	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:      chatID,
-		MessageID:   ref.msgID,
+		Text:        messageHTML(text),
+		ParseMode:   models.ParseModeHTML,
+		ReplyMarkup: markup,
+	})
+	if err == nil {
+		return msg, nil
+	}
+	return b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:      chatID,
 		Text:        text,
 		ReplyMarkup: markup,
 	})
+}
+
+func (h *Bot) tryEdit(ctx context.Context, b *bot.Bot, tgID, chatID int64, text string, markup models.ReplyMarkup) bool {
+	ref, ok := h.lastUI(tgID)
+	if !ok || ref.msgID == 0 || ref.chatID != chatID || ref.image != "" {
+		return false
+	}
+	err := editHTML(ctx, b, chatID, ref.msgID, text, markup)
 	if err == nil || isNotModified(err) {
 		return true
 	}
 	slog.Info("Edit message failed", "error", err)
 	return false
+}
+
+func editHTML(ctx context.Context, b *bot.Bot, chatID int64, msgID int, text string, markup models.ReplyMarkup) error {
+	_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:      chatID,
+		MessageID:   msgID,
+		Text:        messageHTML(text),
+		ParseMode:   models.ParseModeHTML,
+		ReplyMarkup: markup,
+	})
+	if err == nil || isNotModified(err) {
+		return err
+	}
+	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:      chatID,
+		MessageID:   msgID,
+		Text:        text,
+		ReplyMarkup: markup,
+	})
+	return err
 }
 
 func (h *Bot) ack(ctx context.Context, b *bot.Bot, id string) {
@@ -102,7 +144,25 @@ func (h *Bot) deckOf(ctx context.Context, userID, deckID int64) (*domain.Deck, e
 	if err != nil {
 		return nil, err
 	}
-	if d.UserID != userID {
+	if !d.OwnedBy(userID) {
+		return nil, storage.ErrNotFound
+	}
+	return d, nil
+}
+
+func (h *Bot) deckSeen(ctx context.Context, userID, deckID int64) (*domain.Deck, error) {
+	d, err := h.decks.GetByID(ctx, deckID)
+	if err != nil {
+		return nil, err
+	}
+	if d.OwnedBy(userID) {
+		return d, nil
+	}
+	ok, err := h.decks.IsMember(ctx, userID, deckID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
 		return nil, storage.ErrNotFound
 	}
 	return d, nil
@@ -114,6 +174,18 @@ func (h *Bot) cardOf(ctx context.Context, userID, cardID int64) (*domain.Card, *
 		return nil, nil, err
 	}
 	d, err := h.deckOf(ctx, userID, c.DeckID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c, d, nil
+}
+
+func (h *Bot) cardSeen(ctx context.Context, userID, cardID int64) (*domain.Card, *domain.Deck, error) {
+	c, err := h.cards.GetByID(ctx, cardID)
+	if err != nil {
+		return nil, nil, err
+	}
+	d, err := h.deckSeen(ctx, userID, c.DeckID)
 	if err != nil {
 		return nil, nil, err
 	}

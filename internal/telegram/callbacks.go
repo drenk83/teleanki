@@ -92,6 +92,13 @@ func (h *Bot) onSettingsCallback(ctx context.Context, b *bot.Bot, tgID, chatID, 
 			return
 		}
 		h.setDailyLimit(ctx, b, tgID, chatID, userID, n)
+	case "notify":
+		if len(parts) < 3 {
+			return
+		}
+		h.setNotifyEnabled(ctx, b, tgID, chatID, userID, parts[2] == "1")
+	case "nhour":
+		h.askNotifyHour(ctx, b, tgID, chatID)
 	}
 }
 
@@ -145,6 +152,26 @@ func (h *Bot) onDeckCallback(ctx context.Context, b *bot.Bot, tgID, chatID, user
 			return
 		}
 		h.showDeck(ctx, b, chatID, userID, id)
+	case "join":
+		h.beginJoin(ctx, b, tgID, chatID)
+	case "share":
+		id, ok := nthID(parts, 2)
+		if !ok {
+			return
+		}
+		h.shareDeck(ctx, b, chatID, userID, id)
+	case "rotate":
+		id, ok := nthID(parts, 2)
+		if !ok {
+			return
+		}
+		h.rotateShare(ctx, b, chatID, userID, id)
+	case "leave":
+		id, ok := nthID(parts, 2)
+		if !ok {
+			return
+		}
+		h.leaveDeck(ctx, b, chatID, userID, id)
 	case "ren":
 		id, ok := nthID(parts, 2)
 		if !ok {
@@ -255,6 +282,10 @@ func (h *Bot) onCardCallback(ctx context.Context, b *bot.Bot, tgID, chatID, user
 		h.deleteCard(ctx, b, chatID, userID, id)
 	case "rev":
 		h.toggleCardReverse(ctx, b, chatID, userID, id)
+	case "cf":
+		h.clearCardImage(ctx, b, chatID, userID, id, true)
+	case "cb":
+		h.clearCardImage(ctx, b, chatID, userID, id, false)
 	}
 }
 

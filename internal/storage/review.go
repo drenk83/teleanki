@@ -14,9 +14,8 @@ type DueItem struct {
 }
 
 type ReviewRepository interface {
-	GetByCardID(ctx context.Context, cardID int64) (*domain.Review, error)
-	Update(ctx context.Context, review *domain.Review) error
 	Apply(ctx context.Context, review *domain.Review, userID int64, now time.Time) error
 	ListDue(ctx context.Context, userID int64, deckIDs []int64, now time.Time, limit int) ([]DueItem, error)
 	ListForLearn(ctx context.Context, userID int64, deckIDs []int64) ([]DueItem, error)
+	CountDue(ctx context.Context, userID int64, deckIDs []int64, now time.Time) (int, error)
 }

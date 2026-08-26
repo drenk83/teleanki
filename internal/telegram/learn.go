@@ -66,7 +66,7 @@ func (h *Bot) showLearnSetup(ctx context.Context, b *bot.Bot, tgID, chatID, user
 				mark = config.LearnMarkOff
 			}
 		}
-		rows = append(rows, row(btn(mark+truncate(d.Name, 36), fmt.Sprintf("l:toggle:%d:%d", d.ID, page))))
+		rows = append(rows, row(btn(mark+truncate(d.ListTitle(userID), 36), fmt.Sprintf("l:toggle:%d:%d", d.ID, page))))
 	}
 	if nav := pager(page, pages, "l:page"); len(nav) > 0 {
 		rows = append(rows, nav)

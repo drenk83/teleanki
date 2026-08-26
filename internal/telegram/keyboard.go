@@ -72,6 +72,18 @@ func settingsKeyboard() *models.InlineKeyboardMarkup {
 	return kb(r, row(btn(config.BtnCustomLimit, "s:custom")))
 }
 
+func settingsNotifyKeyboard(on bool) *models.InlineKeyboardMarkup {
+	r := make([]models.InlineKeyboardButton, 0, len(config.DailyLimits))
+	for _, n := range config.DailyLimits {
+		r = append(r, btn(strconv.Itoa(n), "s:limit:"+strconv.Itoa(n)))
+	}
+	toggle := btn(config.BtnNotifyOn, "s:notify:1")
+	if on {
+		toggle = btn(config.BtnNotifyOff, "s:notify:0")
+	}
+	return kb(r, row(btn(config.BtnCustomLimit, "s:custom")), row(toggle), row(btn(config.BtnNotifyHour, "s:nhour")))
+}
+
 func pager(page, pages int, prefix string) []models.InlineKeyboardButton {
 	if pages <= 1 {
 		return nil

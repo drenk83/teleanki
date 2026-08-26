@@ -30,13 +30,14 @@ type Item struct {
 }
 
 type Session struct {
-	Items    []Item
-	Index    int
-	Shown    bool
-	Flipped  bool
-	Infinite bool
-	Capped   bool
-	QuizPerm []int
+	Items     []Item
+	Index     int
+	Shown     bool
+	Flipped   bool
+	Infinite  bool
+	Capped    bool
+	Remaining int
+	QuizPerm  []int
 }
 
 type Kind int
@@ -47,6 +48,7 @@ const (
 	KindDone
 	KindPrompt
 	KindReveal
+	KindResult
 )
 
 type Grade int
@@ -111,7 +113,7 @@ func StartDue(items []Item, remaining int, rng RNG) (Session, View) {
 	if len(items) == 0 {
 		return Session{}, View{Kind: KindEmpty}
 	}
-	s := Session{Items: append([]Item(nil), items...), Capped: capped}
+	s := Session{Items: append([]Item(nil), items...), Capped: capped, Remaining: remaining}
 	return prompt(s, GradeNone, "", rng)
 }
 
@@ -156,6 +158,15 @@ func Rate(s Session, rating scheduler.Rating, now time.Time, grade Grade, notice
 		rev := scheduler.Schedule(item.Review, rating, now)
 		rev.CardID = item.Card.ID
 		persist = &Persist{Review: rev}
+		s.Items[s.Index].Review = rev
+		s.Remaining--
+		if s.Remaining <= 0 {
+			return s, persist, View{Kind: KindLimit, Grade: grade, Notice: notice}
+		}
+		if rating == scheduler.RatingAgain {
+			s, view := requeue(s, grade, notice, rng)
+			return s, persist, view
+		}
 	}
 	s, view := advance(s, grade, notice, rng)
 	return s, persist, view
@@ -166,25 +177,24 @@ func Next(s Session, rng RNG) (Session, View) {
 }
 
 func QuizPick(s Session, idx int, now time.Time, rng RNG) (Session, *Persist, View, bool) {
-	if !s.Active() || idx < 0 || idx >= len(s.QuizPerm) {
+	if !s.Active() || s.Shown || idx < 0 || idx >= len(s.QuizPerm) {
 		return s, nil, View{}, false
 	}
 	item := s.Items[s.Index]
+	buttons := item.Card.QuizButtons()
 	perm := s.QuizPerm[idx]
-	if item.Card.Mode != domain.ModeQuiz || perm < 0 || perm >= len(item.Card.Choices) {
+	if item.Card.Mode != domain.ModeQuiz || perm < 0 || perm >= len(buttons) {
 		return s, nil, View{}, false
 	}
-	choice := item.Card.Choices[perm]
+	choice := buttons[perm]
 	if domain.MatchTypein(choice, item.Card.Back) {
-		s, persist, view := Rate(s, scheduler.RatingGood, now, GradeCorrect, "", rng)
-		return s, persist, view, true
+		return finishCheck(s, scheduler.RatingGood, now, GradeCorrect, item.Card.Back, rng)
 	}
-	s, persist, view := Rate(s, scheduler.RatingAgain, now, GradeWrong, item.Card.Back, rng)
-	return s, persist, view, true
+	return finishCheck(s, scheduler.RatingAgain, now, GradeWrong, item.Card.Back, rng)
 }
 
 func Typein(s Session, text string, now time.Time, rng RNG) (Session, *Persist, View, bool) {
-	if !s.Active() {
+	if !s.Active() || s.Shown {
 		return s, nil, View{}, false
 	}
 	item := s.Items[s.Index]
@@ -193,11 +203,56 @@ func Typein(s Session, text string, now time.Time, rng RNG) (Session, *Persist, 
 	}
 	_, want := item.Card.PromptAnswer(s.Flipped)
 	if domain.MatchTypein(text, want) {
-		s, persist, view := Rate(s, scheduler.RatingGood, now, GradeCorrect, "", rng)
-		return s, persist, view, true
+		return finishCheck(s, scheduler.RatingGood, now, GradeCorrect, want, rng)
 	}
-	s, persist, view := Rate(s, scheduler.RatingAgain, now, GradeWrong, want, rng)
+	return finishCheck(s, scheduler.RatingAgain, now, GradeWrong, want, rng)
+}
+
+func finishCheck(s Session, rating scheduler.Rating, now time.Time, grade Grade, answer string, rng RNG) (Session, *Persist, View, bool) {
+	if s.Infinite {
+		s, view := holdResult(s, grade, answer)
+		return s, nil, view, true
+	}
+	notice := ""
+	if grade == GradeWrong {
+		notice = answer
+	}
+	s, persist, view := Rate(s, rating, now, grade, notice, rng)
 	return s, persist, view, true
+}
+
+func holdResult(s Session, grade Grade, answer string) (Session, View) {
+	s.Shown = true
+	item := s.Items[s.Index]
+	p, a := item.Card.PromptAnswer(s.Flipped)
+	if answer == "" {
+		answer = a
+	}
+	notice := ""
+	if grade == GradeWrong {
+		notice = answer
+	}
+	return s, View{
+		Kind:     KindResult,
+		Grade:    grade,
+		Notice:   notice,
+		Prompt:   p,
+		Answer:   answer,
+		DeckName: item.Deck.Name,
+		Index:    s.Index + 1,
+		Total:    len(s.Items),
+		Mode:     item.Card.Mode,
+	}
+}
+
+func requeue(s Session, grade Grade, notice string, rng RNG) (Session, View) {
+	item := s.Items[s.Index]
+	s.Items = append(append([]Item(nil), s.Items[:s.Index]...), s.Items[s.Index+1:]...)
+	s.Items = append(s.Items, item)
+	s.Shown = false
+	s.QuizPerm = nil
+	s.Flipped = false
+	return prompt(s, grade, notice, rng)
 }
 
 func advance(s Session, grade Grade, notice string, rng RNG) (Session, View) {
@@ -237,7 +292,7 @@ func prompt(s Session, grade Grade, notice string, rng RNG) (Session, View) {
 			Mode:     item.Card.Mode,
 		}
 		if item.Card.Mode == domain.ModeQuiz {
-			order, labels := shuffleChoices(item.Card.Choices, rng)
+			order, labels := shuffleChoices(item.Card.QuizButtons(), rng)
 			s.QuizPerm = order
 			view.Choices = labels
 		}

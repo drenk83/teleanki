@@ -11,9 +11,9 @@ import (
 var ErrQuizNeedsChoices = errors.New("quiz needs valid choices")
 
 const (
-	MaxCardTextRunes = 2000
-	MinQuizChoices   = 2
-	MaxQuizChoices   = 6
+	MaxCardTextRunes   = 2000
+	MinQuizDistractors = 1
+	MaxQuizDistractors = 5
 )
 
 type Card struct {
@@ -21,11 +21,42 @@ type Card struct {
 	DeckID     int64
 	Front      string
 	Back       string
+	FrontImage string
+	BackImage  string
 	Mode       Mode
 	Choices    []string
 	Reversible bool
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+}
+
+func ImageExt(contentType string) (string, error) {
+	switch strings.ToLower(contentType) {
+	case "image/jpeg", "image/jpg":
+		return ".jpg", nil
+	case "image/png":
+		return ".png", nil
+	case "image/webp":
+		return ".webp", nil
+	default:
+		return "", fmt.Errorf("unsupported image type")
+	}
+}
+
+const MaxImageBytes = 10 << 20
+
+func (c Card) PromptImage(flipped bool) string {
+	if flipped && c.CanFlip() {
+		return c.BackImage
+	}
+	return c.FrontImage
+}
+
+func (c Card) AnswerImage(flipped bool) string {
+	if flipped && c.CanFlip() {
+		return c.FrontImage
+	}
+	return c.BackImage
 }
 
 func (c Card) CanFlip() bool {
@@ -39,6 +70,10 @@ func (c Card) PromptAnswer(flipped bool) (prompt, answer string) {
 	return c.Front, c.Back
 }
 
+func (c Card) QuizButtons() []string {
+	return append([]string{c.Back}, c.Choices...)
+}
+
 func NormalizeCardText(s string) (string, error) {
 	text := strings.TrimSpace(s)
 	n := utf8.RuneCountInString(text)
@@ -49,10 +84,10 @@ func NormalizeCardText(s string) (string, error) {
 }
 
 func BuildQuizChoices(back string, distractors []string) ([]string, error) {
-	choices := []string{strings.TrimSpace(back)}
+	choices := make([]string, 0, len(distractors))
 	for _, d := range distractors {
 		d = strings.TrimSpace(d)
-		if d == "" || choiceFoldSeen(choices, d) {
+		if d == "" || strings.EqualFold(d, back) || choiceFoldSeen(choices, d) {
 			continue
 		}
 		choices = append(choices, d)
@@ -60,27 +95,23 @@ func BuildQuizChoices(back string, distractors []string) ([]string, error) {
 	return choices, ValidateQuizChoices(back, choices)
 }
 
-func ValidateQuizChoices(back string, choices []string) error {
-	if len(choices) < MinQuizChoices || len(choices) > MaxQuizChoices {
-		return fmt.Errorf("quiz needs %d–%d choices", MinQuizChoices, MaxQuizChoices)
+func ValidateQuizChoices(back string, distractors []string) error {
+	if len(distractors) < MinQuizDistractors || len(distractors) > MaxQuizDistractors {
+		return fmt.Errorf("quiz needs %d–%d distractors", MinQuizDistractors, MaxQuizDistractors)
 	}
-	kept := make([]string, 0, len(choices))
-	hasBack := false
-	for _, c := range choices {
+	kept := make([]string, 0, len(distractors))
+	for _, c := range distractors {
 		c = strings.TrimSpace(c)
 		if c == "" {
 			return fmt.Errorf("quiz choice must not be empty")
+		}
+		if strings.EqualFold(c, back) {
+			return fmt.Errorf("quiz distractors must not include the back")
 		}
 		if choiceFoldSeen(kept, c) {
 			return fmt.Errorf("quiz choices must be unique")
 		}
 		kept = append(kept, c)
-		if strings.EqualFold(c, back) {
-			hasBack = true
-		}
-	}
-	if !hasBack {
-		return fmt.Errorf("quiz choices must include the back")
 	}
 	return nil
 }
@@ -95,7 +126,36 @@ func choiceFoldSeen(seen []string, s string) bool {
 }
 
 func MatchTypein(got, want string) bool {
-	return strings.EqualFold(strings.TrimSpace(got), strings.TrimSpace(want))
+	return strings.EqualFold(PlainCardText(got), PlainCardText(want))
+}
+
+func PlainCardText(s string) string {
+	s = stripTags(s)
+	s = strings.ReplaceAll(s, "**", "")
+	s = strings.ReplaceAll(s, "~~", "")
+	s = strings.ReplaceAll(s, "```", "")
+	s = strings.ReplaceAll(s, "`", "")
+	s = strings.ReplaceAll(s, "*", "")
+	return strings.TrimSpace(s)
+}
+
+func stripTags(s string) string {
+	var b strings.Builder
+	in := false
+	for _, r := range s {
+		if r == '<' {
+			in = true
+			continue
+		}
+		if r == '>' && in {
+			in = false
+			continue
+		}
+		if !in {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func NewCard(deckID int64, front, back string, mode Mode, distractors []string, reversible bool) (Card, error) {
@@ -163,16 +223,9 @@ func (c Card) WithBack(back string) (Card, error) {
 		return Card{}, err
 	}
 	if c.Mode == ModeQuiz {
-		next := cloneStrings(c.Choices)
-		for i, ch := range next {
-			if strings.EqualFold(ch, c.Back) {
-				next[i] = back
-			}
-		}
-		if err := ValidateQuizChoices(back, next); err != nil {
+		if err := ValidateQuizChoices(back, c.Choices); err != nil {
 			return Card{}, err
 		}
-		c.Choices = next
 	}
 	c.Back = back
 	return c, nil
