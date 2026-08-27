@@ -116,23 +116,15 @@ func (h *Bot) onLearnCallback(ctx context.Context, b *bot.Bot, tgID, chatID, use
 		if !ok {
 			return
 		}
-		page := 0
-		if len(parts) >= 4 {
-			page, _ = strconv.Atoi(parts[3])
-		}
-		h.toggleLearnDeck(ctx, b, tgID, chatID, userID, id, page)
+		h.toggleLearnDeck(ctx, b, tgID, chatID, userID, id, parsePage(parts, 3))
 	case "all":
-		h.setLearnAllDecks(ctx, b, tgID, chatID, userID)
+		h.setLearnAllDecks(ctx, b, tgID, chatID, userID, parsePage(parts, 2))
 	case "start":
 		h.startLearnFromSetup(ctx, b, tgID, chatID, userID)
 	case "mode":
 		h.toggleLearnMode(ctx, b, tgID, chatID, userID)
 	case "page":
-		page := 0
-		if len(parts) >= 3 {
-			page, _ = strconv.Atoi(parts[2])
-		}
-		h.showLearnSetup(ctx, b, tgID, chatID, userID, page)
+		h.showLearnSetup(ctx, b, tgID, chatID, userID, parsePage(parts, 2))
 	}
 }
 
@@ -142,14 +134,10 @@ func (h *Bot) onDeckCallback(ctx context.Context, b *bot.Bot, tgID, chatID, user
 	}
 	switch parts[1] {
 	case "list":
-		page := 0
-		if len(parts) >= 3 {
-			page, _ = strconv.Atoi(parts[2])
-		}
-		h.showDeckList(ctx, b, chatID, userID, page)
+		h.showDeckList(ctx, b, chatID, userID, parsePage(parts, 2))
 	case "new":
 		h.sessions.set(tgID, &session{State: stateDeckName})
-		h.send(ctx, b, chatID, config.AskDeckName, cancelKB())
+		h.send(ctx, b, chatID, config.AskDeckName, nil)
 	case "open":
 		id, ok := nthID(parts, 2)
 		if !ok {
@@ -218,11 +206,7 @@ func (h *Bot) onDeckCallback(ctx context.Context, b *bot.Bot, tgID, chatID, user
 		if !ok {
 			return
 		}
-		page := 0
-		if len(parts) >= 4 {
-			page, _ = strconv.Atoi(parts[3])
-		}
-		h.showCardList(ctx, b, chatID, userID, id, page)
+		h.showCardList(ctx, b, chatID, userID, id, parsePage(parts, 3))
 	}
 }
 
@@ -349,7 +333,7 @@ func (h *Bot) onReviewCallback(ctx context.Context, b *bot.Bot, tgID, chatID, us
 	default:
 		return
 	}
-	h.finishLearnStep(ctx, b, tgID, chatID, userID, step)
+	h.finishLearnStep(ctx, b, tgID, chatID, userID, step, now)
 }
 
 func (h *Bot) onCancelCallback(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64) {
@@ -381,6 +365,17 @@ func nthID(parts []string, i int) (int64, bool) {
 		return 0, false
 	}
 	return parseID(parts[i])
+}
+
+func parsePage(parts []string, i int) int {
+	if i >= len(parts) {
+		return 0
+	}
+	n, err := strconv.Atoi(parts[i])
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 func fmtDeleteDeck(name string) string {

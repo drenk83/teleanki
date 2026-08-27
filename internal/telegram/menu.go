@@ -13,9 +13,14 @@ import (
 	"github.com/go-telegram/bot"
 )
 
+func (h *Bot) showStart(ctx context.Context, b *bot.Bot, tgID, chatID int64) {
+	h.sessions.clear(tgID)
+	h.send(withNoMenu(ctx), b, chatID, config.StartMessage, startKeyboard())
+}
+
 func (h *Bot) showMainMenu(ctx context.Context, b *bot.Bot, tgID, chatID int64) {
 	h.sessions.clear(tgID)
-	h.send(withNoMenu(ctx), b, chatID, config.StartMessage, mainMenuKeyboard())
+	h.send(withNoMenu(ctx), b, chatID, config.MenuMessage, mainMenuKeyboard())
 }
 
 func (h *Bot) showHelp(ctx context.Context, b *bot.Bot, chatID int64) {

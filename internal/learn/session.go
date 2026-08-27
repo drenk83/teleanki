@@ -23,11 +23,7 @@ func (stdRNG) Shuffle(n int, swap func(i, j int)) { rand.Shuffle(n, swap) }
 
 func DefaultRNG() RNG { return stdRNG{} }
 
-type Item struct {
-	Card   domain.Card
-	Deck   domain.Deck
-	Review domain.Review
-}
+type Item = domain.LearnItem
 
 type Session struct {
 	Items     []Item

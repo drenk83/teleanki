@@ -44,6 +44,10 @@ func (h *Bot) showDeckList(ctx context.Context, b *bot.Bot, chatID, userID int64
 }
 
 func (h *Bot) showDeck(ctx context.Context, b *bot.Bot, chatID, userID, deckID int64) {
+	h.showDeckNotice(ctx, b, chatID, userID, deckID, "")
+}
+
+func (h *Bot) showDeckNotice(ctx context.Context, b *bot.Bot, chatID, userID, deckID int64, notice string) {
 	d, err := h.deckSeen(ctx, userID, deckID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -66,14 +70,14 @@ func (h *Bot) showDeck(ctx context.Context, b *bot.Bot, chatID, userID, deckID i
 		if owner == "" {
 			owner = "—"
 		}
-		h.send(ctx, b, chatID, fmt.Sprintf(config.ShareMemberView, d.Name, owner, n), kb(
+		h.send(ctx, b, chatID, fmt.Sprintf(config.ShareMemberView, d.Name, n, owner), kb(
 			row(btn(config.BtnCards, "d:cards:"+id)),
 			row(btn(config.BtnLeave, "d:leave:"+id)),
 			row(btn(config.BtnDecks, "d:list:0")),
 		))
 		return
 	}
-	text := fmt.Sprintf(config.DeckView, d.Name, n)
+	text := notice + fmt.Sprintf(config.DeckView, d.Name, n)
 	h.send(ctx, b, chatID, text, kb(
 		row(btn(config.BtnAddCard, "d:add:"+id), btn(config.BtnCards, "d:cards:"+id)),
 		row(btn(config.BtnRename, "d:ren:"+id), btn(config.BtnDelete, "d:del:"+id)),
@@ -85,7 +89,7 @@ func (h *Bot) showDeck(ctx context.Context, b *bot.Bot, chatID, userID, deckID i
 func (h *Bot) createDeckFromText(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, name string) {
 	name, err := domain.NormalizeDeckName(name)
 	if err != nil {
-		h.send(ctx, b, chatID, config.InvalidDeckName+"\n"+config.AskDeckName, cancelKB())
+		h.send(ctx, b, chatID, config.InvalidDeckName+"\n"+config.AskDeckName, nil)
 		return
 	}
 	d, err := h.decks.Create(ctx, userID, name)
@@ -99,7 +103,7 @@ func (h *Bot) createDeckFromText(ctx context.Context, b *bot.Bot, tgID, chatID, 
 		return
 	}
 	h.sessions.clear(tgID)
-	h.showDeck(ctx, b, chatID, userID, d.ID)
+	h.showDeckNotice(ctx, b, chatID, userID, d.ID, config.DeckCreated)
 }
 
 func (h *Bot) renameDeckFromText(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, name string) {
@@ -116,7 +120,7 @@ func (h *Bot) renameDeckFromText(ctx context.Context, b *bot.Bot, tgID, chatID, 
 		return
 	}
 	d.Name = name
-	err = h.decks.Update(ctx, d)
+	err = h.decks.Update(ctx, userID, d)
 	if errors.Is(err, storage.ErrAlreadyExists) {
 		h.send(ctx, b, chatID, config.DeckNameTaken+"\n"+config.AskDeckRename, nil)
 		return
@@ -142,14 +146,14 @@ func (h *Bot) deleteDeck(ctx context.Context, b *bot.Bot, chatID, userID, deckID
 		h.send(ctx, b, chatID, config.TryAgain, nil)
 		return
 	}
-	if err := h.decks.Delete(ctx, d.ID); err != nil {
+	if err := h.decks.Delete(ctx, userID, d.ID); err != nil {
 		slog.Error("Failed to delete deck", "error", err)
 		h.send(ctx, b, chatID, config.TryAgain, nil)
 		return
 	}
 	for _, c := range cards {
-		_ = h.images.Remove(c.FrontImage)
-		_ = h.images.Remove(c.BackImage)
+		h.removeImage(c.FrontImage)
+		h.removeImage(c.BackImage)
 	}
 	h.showDeckList(ctx, b, chatID, userID, 0)
 }
@@ -167,7 +171,7 @@ func (h *Bot) shareDeck(ctx context.Context, b *bot.Bot, chatID, userID, deckID 
 			h.send(ctx, b, chatID, config.TryAgain, nil)
 			return
 		}
-		if err := h.decks.SetShareCode(ctx, d.ID, code); err != nil {
+		if err := h.decks.SetShareCode(ctx, userID, d.ID, code); err != nil {
 			slog.Error("Failed to save share code", "error", err)
 			h.send(ctx, b, chatID, config.TryAgain, nil)
 			return
@@ -191,7 +195,7 @@ func (h *Bot) rotateShare(ctx context.Context, b *bot.Bot, chatID, userID, deckI
 		h.send(ctx, b, chatID, config.TryAgain, nil)
 		return
 	}
-	if err := h.decks.SetShareCode(ctx, deckID, code); err != nil {
+	if err := h.decks.SetShareCode(ctx, userID, deckID, code); err != nil {
 		slog.Error("Failed to rotate share code", "error", err)
 		h.send(ctx, b, chatID, config.TryAgain, nil)
 		return
@@ -211,8 +215,13 @@ func (h *Bot) joinFromText(ctx context.Context, b *bot.Bot, tgID, chatID, userID
 		return
 	}
 	d, err := h.decks.GetByShareCode(ctx, code)
-	if err != nil {
+	if errors.Is(err, storage.ErrNotFound) {
 		h.send(ctx, b, chatID, config.ShareBadCode+"\n"+config.AskShareCode, nil)
+		return
+	}
+	if err != nil {
+		slog.Error("Failed to get deck by share code", "error", err)
+		h.send(ctx, b, chatID, config.TryAgain, nil)
 		return
 	}
 	if d.OwnedBy(userID) {

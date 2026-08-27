@@ -114,7 +114,7 @@ func buildLearnScreen(s learn.Session, view learn.View, endText string) learnScr
 		img = s.Items[s.Index].Card.PromptImage(s.Flipped)
 	}
 	if view.Kind == learn.KindReveal {
-		text := clip(view.Prompt, 1200) + "\n\n" + clip(view.Answer, 1200)
+		text := truncate(view.Prompt, 1200) + "\n\n" + truncate(view.Answer, 1200)
 		markup := ratingKeyboard()
 		if s.Infinite {
 			markup = nextKeyboard()
@@ -132,12 +132,12 @@ func buildLearnScreen(s learn.Session, view learn.View, endText string) learnScr
 			if text != "" {
 				text += "\n\n"
 			}
-			text += clip(view.Answer, 1200)
+			text += truncate(view.Answer, 1200)
 		}
 		return learnScreen{Text: text, Markup: nextKeyboard(), Sess: sess}
 	}
 
-	text := header + "\n\n" + clip(view.Prompt, 1500)
+	text := header + "\n\n" + truncate(view.Prompt, 1500)
 	if notice != "" {
 		text = notice + "\n\n" + text
 	}
@@ -177,10 +177,11 @@ func (h *Bot) startReview(ctx context.Context, b *bot.Bot, tgID, chatID, userID 
 		return
 	}
 	s, view := learn.StartDue(items, left, learn.DefaultRNG())
-	h.applyLearn(ctx, b, tgID, chatID, userID, s, nil, view, u.DailyLimit)
+	h.applyLearn(ctx, b, tgID, chatID, userID, s, nil, view, u.DailyLimit, now)
 }
 
 func (h *Bot) startRandom(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, deckIDs []int64) {
+	now := time.Now()
 	items, err := h.reviews.ListForLearn(ctx, userID, deckIDs)
 	if err != nil {
 		slog.Error("Failed to list cards", "error", err)
@@ -188,10 +189,10 @@ func (h *Bot) startRandom(ctx context.Context, b *bot.Bot, tgID, chatID, userID 
 		return
 	}
 	s, view := learn.StartRandom(items, learn.DefaultRNG())
-	h.applyLearn(ctx, b, tgID, chatID, userID, s, nil, view, 0)
+	h.applyLearn(ctx, b, tgID, chatID, userID, s, nil, view, 0, now)
 }
 
-func (h *Bot) finishLearnStep(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, step learnStep) {
+func (h *Bot) finishLearnStep(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, step learnStep, now time.Time) {
 	if step.Silent {
 		return
 	}
@@ -199,12 +200,12 @@ func (h *Bot) finishLearnStep(ctx context.Context, b *bot.Bot, tgID, chatID, use
 		h.send(ctx, b, chatID, config.SessionExpired, nil)
 		return
 	}
-	h.applyLearn(ctx, b, tgID, chatID, userID, step.Session, step.Persist, step.View, 0)
+	h.applyLearn(ctx, b, tgID, chatID, userID, step.Session, step.Persist, step.View, 0, now)
 }
 
-func (h *Bot) applyLearn(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, s learn.Session, persist *learn.Persist, view learn.View, dailyLimit int) {
+func (h *Bot) applyLearn(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, s learn.Session, persist *learn.Persist, view learn.View, dailyLimit int, now time.Time) {
 	if persist != nil {
-		if err := h.reviews.Apply(ctx, &persist.Review, userID, time.Now()); err != nil {
+		if err := h.reviews.Apply(ctx, &persist.Review, userID, now); err != nil {
 			slog.Error("Failed to apply review", "error", err)
 			h.send(ctx, b, chatID, config.TryAgain, nil)
 			return

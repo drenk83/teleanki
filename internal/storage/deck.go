@@ -13,9 +13,9 @@ type DeckRepository interface {
 	GetByUserAndName(ctx context.Context, userID int64, name string) (*domain.Deck, error)
 	GetByShareCode(ctx context.Context, code string) (*domain.Deck, error)
 	ListByUser(ctx context.Context, userID int64) ([]domain.Deck, error)
-	Update(ctx context.Context, deck *domain.Deck) error
-	Delete(ctx context.Context, id int64) error
-	SetShareCode(ctx context.Context, deckID int64, code string) error
+	Update(ctx context.Context, userID int64, deck *domain.Deck) error
+	Delete(ctx context.Context, userID, id int64) error
+	SetShareCode(ctx context.Context, userID, deckID int64, code string) error
 	Join(ctx context.Context, userID, deckID int64) error
 	Leave(ctx context.Context, userID, deckID int64) error
 	IsMember(ctx context.Context, userID, deckID int64) (bool, error)

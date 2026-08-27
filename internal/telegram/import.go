@@ -5,11 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"strings"
-	"time"
 
 	"github.com/drenk83/teleanki/internal/config"
 	"github.com/drenk83/teleanki/internal/domain"
@@ -19,9 +16,8 @@ import (
 )
 
 type importFile struct {
-	Deck        string       `json:"deck"`
-	DefaultMode string       `json:"default_mode"`
-	Cards       []importCard `json:"cards"`
+	Deck  string       `json:"deck"`
+	Cards []importCard `json:"cards"`
 }
 
 type importCard struct {
@@ -31,6 +27,15 @@ type importCard struct {
 	Choices    []string `json:"choices"`
 	Reversible bool     `json:"reversible"`
 }
+
+var (
+	errImportTooLarge       = errors.New(config.ImportTooLarge)
+	errImportBadJSON        = errors.New(config.ImportBadJSON)
+	errImportBadDeckName    = errors.New(config.ImportBadDeckName)
+	errImportBadDefaultMode = errors.New(config.ImportBadDefaultMode)
+	errImportEmptyCards     = errors.New(config.ImportEmptyCards)
+	errImportTooManyCards   = errors.New(config.ImportTooManyCards)
+)
 
 func (h *Bot) documentHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update.Message == nil || update.Message.From == nil || update.Message.Document == nil {
@@ -112,7 +117,7 @@ func (h *Bot) finishImportAppend(ctx context.Context, b *bot.Bot, tgID, chatID, 
 		h.send(ctx, b, chatID, config.SessionExpired, nil)
 		return
 	}
-	if err := h.cards.CreateMany(ctx, sess.Import.ExistingID, sess.Import.Cards); err != nil {
+	if err := h.cards.CreateMany(ctx, userID, sess.Import.ExistingID, sess.Import.Cards); err != nil {
 		slog.Error("Failed to append cards", "error", err)
 		h.send(ctx, b, chatID, config.TryAgain, nil)
 		return
@@ -140,52 +145,34 @@ func (h *Bot) nextFreeDeckName(ctx context.Context, userID int64, original strin
 }
 
 func (h *Bot) downloadFile(ctx context.Context, b *bot.Bot, fileID string) ([]byte, error) {
-	f, err := b.GetFile(ctx, &bot.GetFileParams{FileID: fileID})
-	if err != nil {
-		return nil, err
-	}
-	link := b.FileDownloadLink(f)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
-	if err != nil {
-		return nil, err
-	}
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download status %d", resp.StatusCode)
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, maxImportB+1))
+	return downloadTelegramFile(ctx, b, fileID, maxImportB)
 }
 
 func parseImport(data []byte) (*importDraft, error) {
 	if len(data) > maxImportB {
-		return nil, errors.New(config.ImportTooLarge)
+		return nil, errImportTooLarge
+	}
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return nil, errImportBadJSON
+	}
+	if _, ok := probe["default_mode"]; ok {
+		return nil, errImportBadDefaultMode
 	}
 	var raw importFile
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, errors.New(config.ImportBadJSON)
+		return nil, errImportBadJSON
 	}
 	name, err := domain.NormalizeDeckName(raw.Deck)
 	if err != nil {
-		return nil, errors.New(config.ImportBadDeckName)
+		return nil, errImportBadDeckName
 	}
 	fillMode := domain.ModeRecall
-	if strings.TrimSpace(raw.DefaultMode) != "" {
-		m, err := domain.ParseMode(raw.DefaultMode)
-		if err != nil {
-			return nil, errors.New(config.ImportBadDefaultMode)
-		}
-		fillMode = m
-	}
 	if len(raw.Cards) == 0 {
-		return nil, errors.New(config.ImportEmptyCards)
+		return nil, errImportEmptyCards
 	}
 	if len(raw.Cards) > maxImportN {
-		return nil, errors.New(config.ImportTooManyCards)
+		return nil, errImportTooManyCards
 	}
 	cards := make([]domain.Card, 0, len(raw.Cards))
 	for i, rc := range raw.Cards {

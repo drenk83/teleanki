@@ -59,40 +59,65 @@ func (h *Bot) lastUI(tgID int64) (uiMsg, bool) {
 }
 
 func (h *Bot) send(ctx context.Context, b *bot.Bot, chatID int64, text string, markup models.ReplyMarkup) {
+	if err := h.sendErr(ctx, b, chatID, text, markup); err != nil {
+		slog.Error("Failed to send message", "error", err)
+	}
+}
+
+func (h *Bot) sendErr(ctx context.Context, b *bot.Bot, chatID int64, text string, markup models.ReplyMarkup) error {
 	req, _ := ctx.Value(uiKey{}).(uiReq)
 	markup = ensureMenu(markup, req.noMenu)
 
 	if req.tgID != 0 && !req.fresh {
 		if h.tryEdit(ctx, b, req.tgID, chatID, text, markup) {
-			return
+			return nil
 		}
 	}
 
 	msg, err := sendHTML(ctx, b, chatID, text, markup)
 	if err != nil {
-		slog.Error("Failed to send message", "error", err)
-		return
+		return err
 	}
 	if req.tgID != 0 {
 		h.bindUI(req.tgID, chatID, msg.ID)
 	}
+	return nil
 }
 
-func sendHTML(ctx context.Context, b *bot.Bot, chatID int64, text string, markup models.ReplyMarkup) (*models.Message, error) {
-	msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:      chatID,
-		Text:        messageHTML(text),
-		ParseMode:   models.ParseModeHTML,
-		ReplyMarkup: markup,
-	})
+func htmlThenPlainMsg(htmlFn, plainFn func() (*models.Message, error)) (*models.Message, error) {
+	msg, err := htmlFn()
 	if err == nil {
 		return msg, nil
 	}
-	return b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:      chatID,
-		Text:        text,
-		ReplyMarkup: markup,
-	})
+	return plainFn()
+}
+
+func htmlThenPlain(htmlFn, plainFn func() error) error {
+	err := htmlFn()
+	if err == nil || isNotModified(err) {
+		return err
+	}
+	return plainFn()
+}
+
+func sendHTML(ctx context.Context, b *bot.Bot, chatID int64, text string, markup models.ReplyMarkup) (*models.Message, error) {
+	return htmlThenPlainMsg(
+		func() (*models.Message, error) {
+			return b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID:      chatID,
+				Text:        messageHTML(text),
+				ParseMode:   models.ParseModeHTML,
+				ReplyMarkup: markup,
+			})
+		},
+		func() (*models.Message, error) {
+			return b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID:      chatID,
+				Text:        text,
+				ReplyMarkup: markup,
+			})
+		},
+	)
 }
 
 func (h *Bot) tryEdit(ctx context.Context, b *bot.Bot, tgID, chatID int64, text string, markup models.ReplyMarkup) bool {
@@ -109,23 +134,27 @@ func (h *Bot) tryEdit(ctx context.Context, b *bot.Bot, tgID, chatID int64, text 
 }
 
 func editHTML(ctx context.Context, b *bot.Bot, chatID int64, msgID int, text string, markup models.ReplyMarkup) error {
-	_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:      chatID,
-		MessageID:   msgID,
-		Text:        messageHTML(text),
-		ParseMode:   models.ParseModeHTML,
-		ReplyMarkup: markup,
-	})
-	if err == nil || isNotModified(err) {
-		return err
-	}
-	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:      chatID,
-		MessageID:   msgID,
-		Text:        text,
-		ReplyMarkup: markup,
-	})
-	return err
+	return htmlThenPlain(
+		func() error {
+			_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+				ChatID:      chatID,
+				MessageID:   msgID,
+				Text:        messageHTML(text),
+				ParseMode:   models.ParseModeHTML,
+				ReplyMarkup: markup,
+			})
+			return err
+		},
+		func() error {
+			_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+				ChatID:      chatID,
+				MessageID:   msgID,
+				Text:        text,
+				ReplyMarkup: markup,
+			})
+			return err
+		},
+	)
 }
 
 func (h *Bot) ack(ctx context.Context, b *bot.Bot, id string) {
@@ -135,8 +164,23 @@ func (h *Bot) ack(ctx context.Context, b *bot.Bot, id string) {
 	}
 }
 
+type userCtxKey struct{}
+
+func withUser(ctx context.Context, u *domain.User) context.Context {
+	return context.WithValue(ctx, userCtxKey{}, u)
+}
+
 func (h *Bot) currentUser(ctx context.Context, telegramID int64, username string) (*domain.User, error) {
+	if u, ok := ctx.Value(userCtxKey{}).(*domain.User); ok && u != nil && u.TelegramID == telegramID {
+		return u, nil
+	}
 	return h.users.UpsertByTelegramID(ctx, telegramID, username)
+}
+
+func (h *Bot) removeImage(name string) {
+	if err := h.images.Remove(name); err != nil {
+		slog.Warn("Failed to remove image", "error", err, "name", name)
+	}
 }
 
 func (h *Bot) deckOf(ctx context.Context, userID, deckID int64) (*domain.Deck, error) {
@@ -216,17 +260,9 @@ func isNotModified(err error) bool {
 }
 
 func truncate(s string, n int) string {
-	if utf8.RuneCountInString(s) <= n {
+	if n <= 1 || utf8.RuneCountInString(s) <= n {
 		return s
 	}
 	r := []rune(s)
 	return string(r[:n-1]) + "…"
-}
-
-func clip(s string, n int) string {
-	if utf8.RuneCountInString(s) <= n {
-		return s
-	}
-	r := []rune(s)
-	return string(r[:n]) + "…"
 }

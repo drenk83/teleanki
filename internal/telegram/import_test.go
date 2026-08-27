@@ -1,15 +1,14 @@
 package telegram
 
 import (
+	"errors"
 	"testing"
-
-	"github.com/drenk83/teleanki/internal/config"
 )
 
 func TestParseImportEmptyCards(t *testing.T) {
 	t.Parallel()
 	_, err := parseImport([]byte(`{"deck":"Колода","cards":[]}`))
-	if err == nil || err.Error() != config.ImportEmptyCards {
+	if !errors.Is(err, errImportEmptyCards) {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -17,7 +16,7 @@ func TestParseImportEmptyCards(t *testing.T) {
 func TestParseImportBadJSON(t *testing.T) {
 	t.Parallel()
 	_, err := parseImport([]byte(`{`))
-	if err == nil || err.Error() != config.ImportBadJSON {
+	if !errors.Is(err, errImportBadJSON) {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -38,6 +37,14 @@ func TestParseImportQuizDistractors(t *testing.T) {
 	}
 	if got.Cards[0].Back != "верный" || len(got.Cards[0].Choices) != 2 || got.Cards[0].Choices[0] != "нет" {
 		t.Fatalf("%#v", got.Cards[0])
+	}
+}
+
+func TestParseImportRejectsDefaultMode(t *testing.T) {
+	t.Parallel()
+	_, err := parseImport([]byte(`{"deck":"Колода","default_mode":"recall","cards":[{"front":"q","back":"a"}]}`))
+	if !errors.Is(err, errImportBadDefaultMode) {
+		t.Fatalf("got %v", err)
 	}
 }
 

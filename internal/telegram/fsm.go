@@ -30,8 +30,8 @@ const (
 
 const (
 	pageSize   = 5
-	maxImportB = 1 << 20
-	maxImportN = 200
+	maxImportB = 5 << 20
+	maxImportN = 10000
 )
 
 type session struct {
@@ -68,6 +68,9 @@ func (s *sessionStore) get(tgID int64) *session {
 	cp := *sess
 	if sess.Import != nil {
 		imp := *sess.Import
+		if sess.Import.Cards != nil {
+			imp.Cards = append([]domain.Card(nil), sess.Import.Cards...)
+		}
 		cp.Import = &imp
 	}
 	if sess.Learn != nil {

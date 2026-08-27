@@ -29,8 +29,9 @@ func (h *Bot) handleText(ctx context.Context, b *bot.Bot, tgID, chatID, userID i
 	case stateEditChoices:
 		h.editCardChoices(ctx, b, tgID, chatID, userID, text)
 	case stateTypein:
-		step := stepLearn(sess, learnActTypein, 0, 0, text, time.Now(), learn.DefaultRNG())
-		h.finishLearnStep(ctx, b, tgID, chatID, userID, step)
+		now := time.Now()
+		step := stepLearn(sess, learnActTypein, 0, 0, text, now, learn.DefaultRNG())
+		h.finishLearnStep(ctx, b, tgID, chatID, userID, step, now)
 	case stateDailyLimit:
 		h.setDailyLimitFromText(ctx, b, tgID, chatID, userID, text)
 	case stateNotifyHour:

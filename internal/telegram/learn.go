@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/drenk83/teleanki/internal/config"
+	"github.com/drenk83/teleanki/internal/domain"
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 )
@@ -81,7 +82,7 @@ func (h *Bot) showLearnSetup(ctx context.Context, b *bot.Bot, tgID, chatID, user
 		rows = append(rows, nav)
 	}
 	rows = append(rows,
-		row(btn(config.BtnLearnAll, "l:all")),
+		row(btn(config.BtnLearnAll, fmt.Sprintf("l:all:%d", page))),
 		row(btn(modeBtn, "l:mode"), btn(config.BtnLearnStart, "l:start")),
 		row(btn(config.BtnMenuSettings, "menu:settings")),
 	)
@@ -135,13 +136,37 @@ func (h *Bot) toggleLearnDeck(ctx context.Context, b *bot.Bot, tgID, chatID, use
 	h.showLearnSetup(ctx, b, tgID, chatID, userID, page)
 }
 
-func (h *Bot) setLearnAllDecks(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64) {
-	if err := h.users.ReplaceLearnDecks(ctx, userID, nil); err != nil {
+func (h *Bot) setLearnAllDecks(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64, page int) {
+	decks, err := h.decks.ListByUser(ctx, userID)
+	if err != nil {
+		slog.Error("Failed to list decks", "error", err)
+		h.send(ctx, b, chatID, config.TryAgain, nil)
+		return
+	}
+	selected, err := h.users.LearnDeckIDs(ctx, userID)
+	if err != nil {
+		slog.Error("Failed to get learn decks", "error", err)
+		h.send(ctx, b, chatID, config.TryAgain, nil)
+		return
+	}
+	next := nextLearnAllSelection(decks, selected, page)
+	if err := h.users.ReplaceLearnDecks(ctx, userID, next); err != nil {
 		slog.Error("Failed to save learn decks", "error", err)
 		h.send(ctx, b, chatID, config.TryAgain, nil)
 		return
 	}
-	h.showLearnSetup(ctx, b, tgID, chatID, userID, 0)
+	h.showLearnSetup(ctx, b, tgID, chatID, userID, page)
+}
+
+func nextLearnAllSelection(decks []domain.Deck, selected []int64, page int) []int64 {
+	if len(selected) != 0 {
+		return nil
+	}
+	chunk, _, _ := pageSlice(decks, page)
+	if len(chunk) == 0 {
+		return nil
+	}
+	return []int64{chunk[0].ID}
 }
 
 func (h *Bot) startLearnFromSetup(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64) {
@@ -181,8 +206,8 @@ func (h *Bot) toggleLearnMode(ctx context.Context, b *bot.Bot, tgID, chatID, use
 func (h *Bot) cancelWizard(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64) {
 	sess := h.sessions.get(tgID)
 	cardID, deckID := sess.CardID, sess.DeckID
-	_ = h.images.Remove(sess.Draft.FrontImage)
-	_ = h.images.Remove(sess.Draft.BackImage)
+	h.removeImage(sess.Draft.FrontImage)
+	h.removeImage(sess.Draft.BackImage)
 	h.sessions.clear(tgID)
 	if cardID != 0 {
 		h.showCard(ctx, b, chatID, userID, cardID)

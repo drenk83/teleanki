@@ -2,11 +2,12 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/drenk83/teleanki/internal/domain"
-	"github.com/drenk83/teleanki/internal/learn"
 	"github.com/drenk83/teleanki/internal/scheduler"
+	"github.com/drenk83/teleanki/internal/storage"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -27,7 +28,18 @@ type querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-func insertCardWithReview(ctx context.Context, q querier, deckID int64, card domain.Card) (domain.Card, error) {
+func insertCardWithReview(ctx context.Context, q querier, userID, deckID int64, card domain.Card) (domain.Card, error) {
+	var owner int64
+	err := q.QueryRow(ctx, `SELECT user_id FROM decks WHERE id = $1`, deckID).Scan(&owner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Card{}, storage.ErrNotFound
+	}
+	if err != nil {
+		return domain.Card{}, err
+	}
+	if owner != userID {
+		return domain.Card{}, storage.ErrNotFound
+	}
 	if card.Choices == nil {
 		card.Choices = []string{}
 	}
@@ -37,7 +49,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING ` + cardCols
 
 	var mode string
-	err := q.QueryRow(ctx, cardSQL, deckID, card.Front, card.Back, card.FrontImage, card.BackImage, string(card.Mode), card.Choices, card.Reversible).Scan(
+	err = q.QueryRow(ctx, cardSQL, deckID, card.Front, card.Back, card.FrontImage, card.BackImage, string(card.Mode), card.Choices, card.Reversible).Scan(
 		&card.ID,
 		&card.DeckID,
 		&card.Front,
@@ -103,8 +115,8 @@ func newReviewState() domain.Review {
 	return scheduler.NewState(time.Now())
 }
 
-func scanLearnItem(row pgx.Row) (learn.Item, error) {
-	var item learn.Item
+func scanLearnItem(row pgx.Row) (domain.LearnItem, error) {
+	var item domain.LearnItem
 	var cardMode string
 	err := row.Scan(
 		&item.Card.ID,
@@ -133,7 +145,7 @@ func scanLearnItem(row pgx.Row) (learn.Item, error) {
 		&item.Review.UpdatedAt,
 	)
 	if err != nil {
-		return learn.Item{}, err
+		return domain.LearnItem{}, err
 	}
 	item.Card.Mode = domain.Mode(cardMode)
 	if item.Card.Choices == nil {

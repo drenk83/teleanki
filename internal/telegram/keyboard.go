@@ -20,6 +20,10 @@ func row(btns ...models.InlineKeyboardButton) []models.InlineKeyboardButton {
 	return btns
 }
 
+func startKeyboard() *models.InlineKeyboardMarkup {
+	return kb(row(btn(config.BtnOpenMenu, "menu")))
+}
+
 func mainMenuKeyboard() *models.InlineKeyboardMarkup {
 	return kb(
 		row(btn(config.BtnMenuDecks, "menu:decks"), btn(config.BtnMenuLearn, "menu:learn")),

@@ -26,7 +26,7 @@ RETURNING ` + deckCols
 
 	d, err := scanDeck(r.pool.QueryRow(ctx, q, userID, name))
 	if err != nil {
-		return nil, mapErr(err)
+		return nil, wrap("create deck", mapErr(err))
 	}
 	return &d, nil
 }
@@ -48,8 +48,8 @@ RETURNING ` + deckCols
 		return nil, mapErr(err)
 	}
 	for _, c := range cards {
-		if _, err := insertCardWithReview(ctx, tx, d.ID, c); err != nil {
-			return nil, mapErr(err)
+		if _, err := insertCardWithReview(ctx, tx, userID, d.ID, c); err != nil {
+			return nil, wrap("import deck", mapErr(err))
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -133,16 +133,16 @@ WHERE share_code = $1`
 	return &d, nil
 }
 
-func (r *DeckRepository) SetShareCode(ctx context.Context, deckID int64, code string) error {
+func (r *DeckRepository) SetShareCode(ctx context.Context, userID, deckID int64, code string) error {
 	var arg any
 	if code == "" {
 		arg = nil
 	} else {
 		arg = code
 	}
-	tag, err := r.pool.Exec(ctx, `UPDATE decks SET share_code = $2, updated_at = now() WHERE id = $1`, deckID, arg)
+	tag, err := r.pool.Exec(ctx, `UPDATE decks SET share_code = $2, updated_at = now() WHERE id = $1 AND user_id = $3`, deckID, arg, userID)
 	if err != nil {
-		return mapErr(err)
+		return wrap("set share code", mapErr(err))
 	}
 	if tag.RowsAffected() == 0 {
 		return storage.ErrNotFound
@@ -191,24 +191,24 @@ func (r *DeckRepository) IsMember(ctx context.Context, userID, deckID int64) (bo
 	return n > 0, err
 }
 
-func (r *DeckRepository) Update(ctx context.Context, deck *domain.Deck) error {
+func (r *DeckRepository) Update(ctx context.Context, userID int64, deck *domain.Deck) error {
 	const q = `
 UPDATE decks
 SET name = $2, updated_at = now()
-WHERE id = $1
+WHERE id = $1 AND user_id = $3
 RETURNING updated_at`
 
-	err := r.pool.QueryRow(ctx, q, deck.ID, deck.Name).Scan(&deck.UpdatedAt)
+	err := r.pool.QueryRow(ctx, q, deck.ID, deck.Name, userID).Scan(&deck.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return storage.ErrNotFound
 	}
-	return mapErr(err)
+	return wrap("update deck", mapErr(err))
 }
 
-func (r *DeckRepository) Delete(ctx context.Context, id int64) error {
-	tag, err := r.pool.Exec(ctx, `DELETE FROM decks WHERE id = $1`, id)
+func (r *DeckRepository) Delete(ctx context.Context, userID, id int64) error {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM decks WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil {
-		return err
+		return wrap("delete deck", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return storage.ErrNotFound

@@ -5,8 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 
@@ -70,32 +68,9 @@ func formattedCaption(msg *models.Message) string {
 
 func (h *Bot) saveMessagePhoto(ctx context.Context, b *bot.Bot, msg *models.Message) (string, error) {
 	ph := msg.Photo[len(msg.Photo)-1]
-	f, err := b.GetFile(ctx, &bot.GetFileParams{FileID: ph.FileID})
+	data, err := downloadTelegramFile(ctx, b, ph.FileID, domain.MaxImageBytes)
 	if err != nil {
 		return "", err
-	}
-	if f.FileSize > domain.MaxImageBytes {
-		return "", fmt.Errorf("too large")
-	}
-	link := b.FileDownloadLink(f)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
-	if err != nil {
-		return "", err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download status %d", resp.StatusCode)
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, domain.MaxImageBytes+1))
-	if err != nil {
-		return "", err
-	}
-	if len(data) > domain.MaxImageBytes {
-		return "", fmt.Errorf("too large")
 	}
 	ct := http.DetectContentType(data)
 	ext, err := domain.ImageExt(ct)
@@ -114,31 +89,35 @@ func (h *Bot) saveMessagePhoto(ctx context.Context, b *bot.Bot, msg *models.Mess
 }
 
 func (h *Bot) sendMedia(ctx context.Context, b *bot.Bot, chatID int64, text, imageName string, markup models.ReplyMarkup) {
+	if err := h.sendMediaErr(ctx, b, chatID, text, imageName, markup); err != nil {
+		slog.Error("Failed to send photo", "error", err)
+	}
+}
+
+func (h *Bot) sendMediaErr(ctx context.Context, b *bot.Bot, chatID int64, text, imageName string, markup models.ReplyMarkup) error {
 	if imageName == "" {
-		h.send(ctx, b, chatID, text, markup)
-		return
+		return h.sendErr(ctx, b, chatID, text, markup)
 	}
 	if !h.images.Exists(imageName) {
-		h.send(ctx, b, chatID, config.PhotoMissing+"\n\n"+text, markup)
-		return
+		return h.sendErr(ctx, b, chatID, config.PhotoMissing+"\n\n"+text, markup)
 	}
 	req, _ := ctx.Value(uiKey{}).(uiReq)
 	markup = ensureMenu(markup, req.noMenu)
-	caption := clip(text, 1000)
+	caption := truncate(text, 1000)
 	if req.tgID != 0 && !req.fresh {
 		if h.tryEditPhoto(ctx, b, req.tgID, chatID, caption, imageName, markup) {
-			return
+			return nil
 		}
 	}
 	msg, err := h.postPhoto(ctx, b, chatID, caption, imageName, markup)
 	if err != nil {
 		slog.Error("Failed to send photo", "error", err)
-		h.send(ctx, b, chatID, config.PhotoMissing+"\n\n"+text, markup)
-		return
+		return h.sendErr(ctx, b, chatID, config.PhotoMissing+"\n\n"+text, markup)
 	}
 	if req.tgID != 0 {
 		h.bindUIMedia(req.tgID, chatID, msg.ID, imageName)
 	}
+	return nil
 }
 
 func (h *Bot) tryEditPhoto(ctx context.Context, b *bot.Bot, tgID, chatID int64, caption, imageName string, markup models.ReplyMarkup) bool {
@@ -164,23 +143,27 @@ func (h *Bot) tryEditPhoto(ctx context.Context, b *bot.Bot, tgID, chatID int64, 
 }
 
 func (h *Bot) editPhotoCaption(ctx context.Context, b *bot.Bot, chatID int64, msgID int, caption string, markup models.ReplyMarkup) error {
-	_, err := b.EditMessageCaption(ctx, &bot.EditMessageCaptionParams{
-		ChatID:      chatID,
-		MessageID:   msgID,
-		Caption:     messageHTML(caption),
-		ParseMode:   models.ParseModeHTML,
-		ReplyMarkup: markup,
-	})
-	if err == nil || isNotModified(err) {
-		return err
-	}
-	_, err = b.EditMessageCaption(ctx, &bot.EditMessageCaptionParams{
-		ChatID:      chatID,
-		MessageID:   msgID,
-		Caption:     caption,
-		ReplyMarkup: markup,
-	})
-	return err
+	return htmlThenPlain(
+		func() error {
+			_, err := b.EditMessageCaption(ctx, &bot.EditMessageCaptionParams{
+				ChatID:      chatID,
+				MessageID:   msgID,
+				Caption:     messageHTML(caption),
+				ParseMode:   models.ParseModeHTML,
+				ReplyMarkup: markup,
+			})
+			return err
+		},
+		func() error {
+			_, err := b.EditMessageCaption(ctx, &bot.EditMessageCaptionParams{
+				ChatID:      chatID,
+				MessageID:   msgID,
+				Caption:     caption,
+				ReplyMarkup: markup,
+			})
+			return err
+		},
+	)
 }
 
 func (h *Bot) editPhotoMedia(ctx context.Context, b *bot.Bot, chatID int64, msgID int, caption, imageName string, markup models.ReplyMarkup) error {
@@ -189,32 +172,38 @@ func (h *Bot) editPhotoMedia(ctx context.Context, b *bot.Bot, chatID int64, msgI
 		return err
 	}
 	defer f.Close()
-	_, err = b.EditMessageMedia(ctx, &bot.EditMessageMediaParams{
-		ChatID:    chatID,
-		MessageID: msgID,
-		Media: &models.InputMediaPhoto{
-			Media:           "attach://" + imageName,
-			Caption:         messageHTML(caption),
-			ParseMode:       models.ParseModeHTML,
-			MediaAttachment: f,
+	return htmlThenPlain(
+		func() error {
+			_, err := b.EditMessageMedia(ctx, &bot.EditMessageMediaParams{
+				ChatID:    chatID,
+				MessageID: msgID,
+				Media: &models.InputMediaPhoto{
+					Media:           "attach://" + imageName,
+					Caption:         messageHTML(caption),
+					ParseMode:       models.ParseModeHTML,
+					MediaAttachment: f,
+				},
+				ReplyMarkup: markup,
+			})
+			return err
 		},
-		ReplyMarkup: markup,
-	})
-	if err == nil || isNotModified(err) {
-		return err
-	}
-	_, _ = f.Seek(0, 0)
-	_, err = b.EditMessageMedia(ctx, &bot.EditMessageMediaParams{
-		ChatID:    chatID,
-		MessageID: msgID,
-		Media: &models.InputMediaPhoto{
-			Media:           "attach://" + imageName,
-			Caption:         caption,
-			MediaAttachment: f,
+		func() error {
+			if _, err := f.Seek(0, 0); err != nil {
+				return err
+			}
+			_, err := b.EditMessageMedia(ctx, &bot.EditMessageMediaParams{
+				ChatID:    chatID,
+				MessageID: msgID,
+				Media: &models.InputMediaPhoto{
+					Media:           "attach://" + imageName,
+					Caption:         caption,
+					MediaAttachment: f,
+				},
+				ReplyMarkup: markup,
+			})
+			return err
 		},
-		ReplyMarkup: markup,
-	})
-	return err
+	)
 }
 
 func (h *Bot) postPhoto(ctx context.Context, b *bot.Bot, chatID int64, caption, imageName string, markup models.ReplyMarkup) (*models.Message, error) {
@@ -223,21 +212,26 @@ func (h *Bot) postPhoto(ctx context.Context, b *bot.Bot, chatID int64, caption, 
 		return nil, err
 	}
 	defer f.Close()
-	msg, err := b.SendPhoto(ctx, &bot.SendPhotoParams{
-		ChatID:      chatID,
-		Photo:       &models.InputFileUpload{Filename: imageName, Data: f},
-		Caption:     messageHTML(caption),
-		ParseMode:   models.ParseModeHTML,
-		ReplyMarkup: markup,
-	})
-	if err == nil {
-		return msg, nil
-	}
-	_, _ = f.Seek(0, 0)
-	return b.SendPhoto(ctx, &bot.SendPhotoParams{
-		ChatID:      chatID,
-		Photo:       &models.InputFileUpload{Filename: imageName, Data: f},
-		Caption:     caption,
-		ReplyMarkup: markup,
-	})
+	return htmlThenPlainMsg(
+		func() (*models.Message, error) {
+			return b.SendPhoto(ctx, &bot.SendPhotoParams{
+				ChatID:      chatID,
+				Photo:       &models.InputFileUpload{Filename: imageName, Data: f},
+				Caption:     messageHTML(caption),
+				ParseMode:   models.ParseModeHTML,
+				ReplyMarkup: markup,
+			})
+		},
+		func() (*models.Message, error) {
+			if _, err := f.Seek(0, 0); err != nil {
+				return nil, err
+			}
+			return b.SendPhoto(ctx, &bot.SendPhotoParams{
+				ChatID:      chatID,
+				Photo:       &models.InputFileUpload{Filename: imageName, Data: f},
+				Caption:     caption,
+				ReplyMarkup: markup,
+			})
+		},
+	)
 }

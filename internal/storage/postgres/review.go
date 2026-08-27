@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/drenk83/teleanki/internal/domain"
-	"github.com/drenk83/teleanki/internal/learn"
 	"github.com/drenk83/teleanki/internal/storage"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,7 +22,7 @@ func NewReviewRepository(db *DB) *ReviewRepository {
 func (r *ReviewRepository) Apply(ctx context.Context, review *domain.Review, userID int64, now time.Time) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return wrap("apply review", err)
 	}
 	defer tx.Rollback(ctx)
 
@@ -51,7 +50,7 @@ RETURNING r.updated_at`
 		return storage.ErrNotFound
 	}
 	if err != nil {
-		return err
+		return wrap("apply review", err)
 	}
 
 	day := domain.DayDate(now)
@@ -62,12 +61,15 @@ UPDATE users SET
     updated_at = now()
 WHERE id = $1`, userID, day)
 	if err != nil {
-		return err
+		return wrap("apply review", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return storage.ErrNotFound
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return wrap("apply review", err)
+	}
+	return nil
 }
 
 func accessibleDeckSQL(userParam, decksParam string) string {
@@ -77,7 +79,7 @@ func accessibleDeckSQL(userParam, decksParam string) string {
   AND (cardinality(` + decksParam + `::bigint[]) = 0 OR d.id = ANY(` + decksParam + `::bigint[]))`
 }
 
-func (r *ReviewRepository) ListDue(ctx context.Context, userID int64, deckIDs []int64, now time.Time) ([]learn.Item, error) {
+func (r *ReviewRepository) ListDue(ctx context.Context, userID int64, deckIDs []int64, now time.Time) ([]domain.LearnItem, error) {
 	if deckIDs == nil {
 		deckIDs = []int64{}
 	}
@@ -98,7 +100,7 @@ ORDER BY r.due_at ASC, c.id ASC`
 	return collectLearnItems(rows)
 }
 
-func (r *ReviewRepository) ListForLearn(ctx context.Context, userID int64, deckIDs []int64) ([]learn.Item, error) {
+func (r *ReviewRepository) ListForLearn(ctx context.Context, userID int64, deckIDs []int64) ([]domain.LearnItem, error) {
 	if deckIDs == nil {
 		deckIDs = []int64{}
 	}
@@ -136,8 +138,8 @@ WHERE r.user_id = $1
 	return n, err
 }
 
-func collectLearnItems(rows pgx.Rows) ([]learn.Item, error) {
-	var out []learn.Item
+func collectLearnItems(rows pgx.Rows) ([]domain.LearnItem, error) {
+	var out []domain.LearnItem
 	for rows.Next() {
 		item, err := scanLearnItem(rows)
 		if err != nil {
