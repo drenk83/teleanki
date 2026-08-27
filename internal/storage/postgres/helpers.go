@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/drenk83/teleanki/internal/domain"
+	"github.com/drenk83/teleanki/internal/learn"
 	"github.com/drenk83/teleanki/internal/scheduler"
-	"github.com/drenk83/teleanki/internal/storage"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -30,9 +30,6 @@ type querier interface {
 func insertCardWithReview(ctx context.Context, q querier, deckID int64, card domain.Card) (domain.Card, error) {
 	if card.Choices == nil {
 		card.Choices = []string{}
-	}
-	if card.Mode == domain.ModeQuiz {
-		card.Reversible = false
 	}
 	const cardSQL = `
 INSERT INTO cards (deck_id, front, back, front_image, back_image, mode, choices, reversible)
@@ -58,7 +55,7 @@ RETURNING ` + cardCols
 	}
 	card.Mode = domain.Mode(mode)
 
-	st := scheduler.NewState(time.Now())
+	st := newReviewState()
 	const reviewSQL = `
 INSERT INTO reviews (user_id, card_id, easiness, interval_days, repetitions, due_at, updated_at)
 SELECT u.uid, $1, $2, $3, $4, $5, now()
@@ -102,8 +99,12 @@ func scanCard(row pgx.Row) (domain.Card, error) {
 	return c, nil
 }
 
-func scanDueItem(row pgx.Row) (storage.DueItem, error) {
-	var item storage.DueItem
+func newReviewState() domain.Review {
+	return scheduler.NewState(time.Now())
+}
+
+func scanLearnItem(row pgx.Row) (learn.Item, error) {
+	var item learn.Item
 	var cardMode string
 	err := row.Scan(
 		&item.Card.ID,
@@ -132,7 +133,7 @@ func scanDueItem(row pgx.Row) (storage.DueItem, error) {
 		&item.Review.UpdatedAt,
 	)
 	if err != nil {
-		return storage.DueItem{}, err
+		return learn.Item{}, err
 	}
 	item.Card.Mode = domain.Mode(cardMode)
 	if item.Card.Choices == nil {

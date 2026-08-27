@@ -31,8 +31,6 @@ var HelpMessage = `Как учить
 Команды: /start /menu /learn /decks /newdeck /help`
 
 const (
-	MenuTitle = `Главное меню`
-
 	PrivateOnly    = "Я работаю только в личных сообщениях."
 	UnknownCommand = "Не понял. Открой /menu или /help."
 	UseButtons     = "Выбери вариант кнопкой."
@@ -43,14 +41,13 @@ const (
 	AskDeckRename     = "Новое имя колоды, до 64 символов."
 	DeckEmptyList     = "Колод пока нет. Создай свою или импортируй чужую."
 	DeckListTitle     = "Колоды · %d–%d из %d"
-	DeckListTitleAll  = "Колоды · %d"
 	DeckView          = "%s\nКарточек: %d"
 	ConfirmDeleteDeck = "Удалить колоду «%s» и все карточки?"
 	DeckNameTaken     = "Колода с таким именем уже есть."
 	InvalidDeckName   = "Имя колоды: 1–64 символа."
 
 	AskCardFront      = "Напиши вопрос — то, что увидишь первым.\nМожно фото: картинка и подпись (текст обязателен)."
-	AskCardBack       = "Теперь ответ — то, что должно всплыть в голове.\nСнова: текст или фото с подписью."
+	AskCardBack       = "Теперь ответ — то, что должно всплыть в голове.\nСнова: текст или фото с подписью.\nФото на ответе — только режим «вспомнить»."
 	AskCardMode       = "Как будешь отвечать на эту карточку?"
 	AskCardReverse    = "Показывать карточку и наоборот — то ответ, то вопрос?"
 	AskCardChoices    = "Напиши неправильные ответы, каждый с новой строки.\nНужно 1–5 штук, без верного — его подставлю сам."
@@ -144,7 +141,6 @@ mode: recall / quiz / typein.
 	ImportConflict       = "Колода «%s» уже есть. Что сделать?"
 	ImportCanceled       = "Импорт отменён."
 
-	BtnOpenMenu        = "Меню"
 	BtnMenu            = "В меню"
 	BtnMenuDecks       = "Колоды"
 	BtnMenuLearn       = "Учить"
@@ -178,11 +174,9 @@ mode: recall / quiz / typein.
 	BtnNext            = "›"
 	BtnLearnAll        = "Все колоды"
 	BtnLearnStart      = "Начать"
-	BtnLearnRandom     = "Случайно"
 	BtnLearnModeStd    = "Стандартный"
 	BtnLearnModeFree   = "Свободный"
 	BtnLearnNext       = "Дальше"
-	BtnStop            = "Стоп"
 	BtnCancel          = "Отмена"
 	BtnImport          = "Импортировать"
 	BtnReverseOn       = "Переворот: да"
@@ -193,7 +187,6 @@ mode: recall / quiz / typein.
 	BtnNotifyHour      = "Время напоминания"
 	BtnShare           = "Поделиться"
 	BtnShareRotate     = "Новый код"
-	BtnJoin            = "Вступить по коду"
 	BtnLeave           = "Выйти"
 	BtnClearFrontPhoto = "Убрать фото вопроса"
 	BtnClearBackPhoto  = "Убрать фото ответа"

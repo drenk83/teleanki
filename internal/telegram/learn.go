@@ -178,14 +178,11 @@ func (h *Bot) toggleLearnMode(ctx context.Context, b *bot.Bot, tgID, chatID, use
 	h.showLearnSetup(ctx, b, tgID, chatID, userID, 0)
 }
 
-func (h *Bot) stopLearn(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64) {
-	h.sessions.clear(tgID)
-	h.showLearnSetup(ctx, b, tgID, chatID, userID, 0)
-}
-
 func (h *Bot) cancelWizard(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64) {
 	sess := h.sessions.get(tgID)
 	cardID, deckID := sess.CardID, sess.DeckID
+	_ = h.images.Remove(sess.Draft.FrontImage)
+	_ = h.images.Remove(sess.Draft.BackImage)
 	h.sessions.clear(tgID)
 	if cardID != 0 {
 		h.showCard(ctx, b, chatID, userID, cardID)
@@ -196,14 +193,4 @@ func (h *Bot) cancelWizard(ctx context.Context, b *bot.Bot, tgID, chatID, userID
 		return
 	}
 	h.showMainMenu(ctx, b, tgID, chatID)
-}
-
-func (h *Bot) startRandomFromSetup(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64) {
-	ids, err := h.users.LearnDeckIDs(ctx, userID)
-	if err != nil {
-		slog.Error("Failed to get learn decks", "error", err)
-		h.send(ctx, b, chatID, config.TryAgain, nil)
-		return
-	}
-	h.startRandom(ctx, b, tgID, chatID, userID, ids)
 }

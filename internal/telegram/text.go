@@ -2,8 +2,10 @@ package telegram
 
 import (
 	"context"
+	"time"
 
 	"github.com/drenk83/teleanki/internal/config"
+	"github.com/drenk83/teleanki/internal/learn"
 	"github.com/go-telegram/bot"
 )
 
@@ -27,12 +29,13 @@ func (h *Bot) handleText(ctx context.Context, b *bot.Bot, tgID, chatID, userID i
 	case stateEditChoices:
 		h.editCardChoices(ctx, b, tgID, chatID, userID, text)
 	case stateTypein:
-		h.reviewTypein(ctx, b, tgID, chatID, userID, text)
+		step := stepLearn(sess, learnActTypein, 0, 0, text, time.Now(), learn.DefaultRNG())
+		h.finishLearnStep(ctx, b, tgID, chatID, userID, step)
 	case stateDailyLimit:
 		h.setDailyLimitFromText(ctx, b, tgID, chatID, userID, text)
 	case stateNotifyHour:
 		h.setNotifyHourFromText(ctx, b, tgID, chatID, userID, text)
-	case stateJoinCode, stateImportWait:
+	case stateImportWait:
 		h.joinFromText(ctx, b, tgID, chatID, userID, text)
 	case stateCardMode, stateCardReverse, stateImportConflict:
 		h.send(ctx, b, chatID, config.UseButtons, nil)

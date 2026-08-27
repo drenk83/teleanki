@@ -25,11 +25,11 @@ func (s ImageStore) Save(_ context.Context, name string, r io.Reader) error {
 	return err
 }
 
-func (s ImageStore) Path(name string) string {
+func (s ImageStore) Open(name string) (*os.File, error) {
 	if name == "" {
-		return ""
+		return nil, os.ErrNotExist
 	}
-	return filepath.Join(s.Dir, name)
+	return os.Open(filepath.Join(s.Dir, name))
 }
 
 func (s ImageStore) Remove(name string) error {

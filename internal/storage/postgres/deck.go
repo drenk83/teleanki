@@ -162,12 +162,13 @@ VALUES ($1, $2)
 ON CONFLICT DO NOTHING`, deckID, userID); err != nil {
 		return err
 	}
+	st := newReviewState()
 	if _, err := tx.Exec(ctx, `
 INSERT INTO reviews (user_id, card_id, easiness, interval_days, repetitions, due_at, updated_at)
-SELECT $2, c.id, 2.5, 0, 0, now(), now()
+SELECT $2, c.id, $3, $4, $5, $6, now()
 FROM cards c
 WHERE c.deck_id = $1
-ON CONFLICT (user_id, card_id) DO NOTHING`, deckID, userID); err != nil {
+ON CONFLICT (user_id, card_id) DO NOTHING`, deckID, userID, st.Easiness, st.IntervalDays, st.Repetitions, st.DueAt); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

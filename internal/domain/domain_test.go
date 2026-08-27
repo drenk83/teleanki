@@ -420,6 +420,26 @@ func TestNewCardWithChoicesImport(t *testing.T) {
 	}
 }
 
+func TestCardImages(t *testing.T) {
+	t.Parallel()
+	c, err := NewCard(1, "q", "a", ModeRecall, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c = c.WithFrontImage("f.jpg").WithBackImage("b.jpg")
+	if c.FrontImage != "f.jpg" || c.BackImage != "b.jpg" {
+		t.Fatalf("%#v", c)
+	}
+	cleared := c.ClearImage(true)
+	if cleared.FrontImage != "" || cleared.BackImage != "b.jpg" {
+		t.Fatalf("%#v", cleared)
+	}
+	cleared = c.ClearImage(false)
+	if cleared.FrontImage != "f.jpg" || cleared.BackImage != "" {
+		t.Fatalf("%#v", cleared)
+	}
+}
+
 func stringsRepeat(s string, n int) string {
 	out := make([]rune, 0, n)
 	r := []rune(s)[0]

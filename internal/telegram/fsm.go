@@ -25,7 +25,6 @@ const (
 	stateImportConflict state = "import_conflict"
 	stateDailyLimit     state = "daily_limit"
 	stateNotifyHour     state = "notify_hour"
-	stateJoinCode       state = "join_code"
 	stateImportWait     state = "import_wait"
 )
 
@@ -36,17 +35,12 @@ const (
 )
 
 type session struct {
-	State           state
-	DeckID          int64
-	CardID          int64
-	DraftFront      string
-	DraftBack       string
-	DraftFrontImage string
-	DraftBackImage  string
-	DraftMode       domain.Mode
-	DraftReversible bool
-	Learn           *learn.Session
-	Import          *importDraft
+	State  state
+	DeckID int64
+	CardID int64
+	Draft  cardDraft
+	Learn  *learn.Session
+	Import *importDraft
 }
 
 type importDraft struct {

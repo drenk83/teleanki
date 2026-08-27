@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/drenk83/teleanki/internal/domain"
+	"github.com/drenk83/teleanki/internal/learn"
 	"github.com/drenk83/teleanki/internal/storage"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -76,7 +77,7 @@ func accessibleDeckSQL(userParam, decksParam string) string {
   AND (cardinality(` + decksParam + `::bigint[]) = 0 OR d.id = ANY(` + decksParam + `::bigint[]))`
 }
 
-func (r *ReviewRepository) ListDue(ctx context.Context, userID int64, deckIDs []int64, now time.Time, limit int) ([]storage.DueItem, error) {
+func (r *ReviewRepository) ListDue(ctx context.Context, userID int64, deckIDs []int64, now time.Time) ([]learn.Item, error) {
 	if deckIDs == nil {
 		deckIDs = []int64{}
 	}
@@ -89,23 +90,15 @@ WHERE r.user_id = $1
   AND r.due_at <= $2
   AND ` + accessibleDeckSQL("$1", "$3") + `
 ORDER BY r.due_at ASC, c.id ASC`
-	var rows pgx.Rows
-	var err error
-	if limit > 0 {
-		q += `
-LIMIT $4`
-		rows, err = r.pool.Query(ctx, q, userID, now, deckIDs, limit)
-	} else {
-		rows, err = r.pool.Query(ctx, q, userID, now, deckIDs)
-	}
+	rows, err := r.pool.Query(ctx, q, userID, now, deckIDs)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	return collectDueItems(rows)
+	return collectLearnItems(rows)
 }
 
-func (r *ReviewRepository) ListForLearn(ctx context.Context, userID int64, deckIDs []int64) ([]storage.DueItem, error) {
+func (r *ReviewRepository) ListForLearn(ctx context.Context, userID int64, deckIDs []int64) ([]learn.Item, error) {
 	if deckIDs == nil {
 		deckIDs = []int64{}
 	}
@@ -123,7 +116,7 @@ ORDER BY c.id ASC`
 		return nil, err
 	}
 	defer rows.Close()
-	return collectDueItems(rows)
+	return collectLearnItems(rows)
 }
 
 func (r *ReviewRepository) CountDue(ctx context.Context, userID int64, deckIDs []int64, now time.Time) (int, error) {
@@ -143,10 +136,10 @@ WHERE r.user_id = $1
 	return n, err
 }
 
-func collectDueItems(rows pgx.Rows) ([]storage.DueItem, error) {
-	var out []storage.DueItem
+func collectLearnItems(rows pgx.Rows) ([]learn.Item, error) {
+	var out []learn.Item
 	for rows.Next() {
-		item, err := scanDueItem(rows)
+		item, err := scanLearnItem(rows)
 		if err != nil {
 			return nil, err
 		}

@@ -159,6 +159,14 @@ func stripTags(s string) string {
 }
 
 func NewCard(deckID int64, front, back string, mode Mode, distractors []string, reversible bool) (Card, error) {
+	return newCard(deckID, front, back, mode, distractors, reversible, false)
+}
+
+func NewCardWithChoices(deckID int64, front, back string, mode Mode, choices []string, reversible bool) (Card, error) {
+	return newCard(deckID, front, back, mode, choices, reversible, true)
+}
+
+func newCard(deckID int64, front, back string, mode Mode, distractors []string, reversible, strict bool) (Card, error) {
 	front, err := NormalizeCardText(front)
 	if err != nil {
 		return Card{}, err
@@ -172,36 +180,19 @@ func NewCard(deckID int64, front, back string, mode Mode, distractors []string, 
 	}
 	c := Card{DeckID: deckID, Front: front, Back: back, Mode: mode, Choices: []string{}}
 	if mode == ModeQuiz {
+		if strict {
+			trimmed := trimChoices(distractors)
+			if err := ValidateQuizChoices(back, trimmed); err != nil {
+				return Card{}, err
+			}
+			c.Choices = trimmed
+			return c, nil
+		}
 		choices, err := BuildQuizChoices(back, distractors)
 		if err != nil {
 			return Card{}, err
 		}
 		c.Choices = choices
-		return c, nil
-	}
-	c.Reversible = reversible
-	return c, nil
-}
-
-func NewCardWithChoices(deckID int64, front, back string, mode Mode, choices []string, reversible bool) (Card, error) {
-	front, err := NormalizeCardText(front)
-	if err != nil {
-		return Card{}, err
-	}
-	back, err = NormalizeCardText(back)
-	if err != nil {
-		return Card{}, err
-	}
-	if !mode.Valid() {
-		return Card{}, fmt.Errorf("invalid mode %q", mode)
-	}
-	c := Card{DeckID: deckID, Front: front, Back: back, Mode: mode, Choices: []string{}}
-	if mode == ModeQuiz {
-		trimmed := trimChoices(choices)
-		if err := ValidateQuizChoices(back, trimmed); err != nil {
-			return Card{}, err
-		}
-		c.Choices = trimmed
 		return c, nil
 	}
 	c.Reversible = reversible
@@ -280,17 +271,29 @@ func (c Card) ToggleReverse() Card {
 	return c.WithReversible(!c.Reversible)
 }
 
+func (c Card) WithFrontImage(name string) Card {
+	c.FrontImage = name
+	return c
+}
+
+func (c Card) WithBackImage(name string) Card {
+	c.BackImage = name
+	return c
+}
+
+func (c Card) ClearImage(front bool) Card {
+	if front {
+		c.FrontImage = ""
+	} else {
+		c.BackImage = ""
+	}
+	return c
+}
+
 func trimChoices(choices []string) []string {
 	out := make([]string, 0, len(choices))
 	for _, c := range choices {
 		out = append(out, strings.TrimSpace(c))
 	}
 	return out
-}
-
-func cloneStrings(s []string) []string {
-	if len(s) == 0 {
-		return []string{}
-	}
-	return append([]string(nil), s...)
 }

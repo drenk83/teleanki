@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 
 	"github.com/drenk83/teleanki/internal/config"
 	"github.com/drenk83/teleanki/internal/domain"
@@ -185,7 +184,7 @@ func (h *Bot) editPhotoCaption(ctx context.Context, b *bot.Bot, chatID int64, ms
 }
 
 func (h *Bot) editPhotoMedia(ctx context.Context, b *bot.Bot, chatID int64, msgID int, caption, imageName string, markup models.ReplyMarkup) error {
-	f, err := os.Open(h.images.Path(imageName))
+	f, err := h.images.Open(imageName)
 	if err != nil {
 		return err
 	}
@@ -219,7 +218,7 @@ func (h *Bot) editPhotoMedia(ctx context.Context, b *bot.Bot, chatID int64, msgI
 }
 
 func (h *Bot) postPhoto(ctx context.Context, b *bot.Bot, chatID int64, caption, imageName string, markup models.ReplyMarkup) (*models.Message, error) {
-	f, err := os.Open(h.images.Path(imageName))
+	f, err := h.images.Open(imageName)
 	if err != nil {
 		return nil, err
 	}

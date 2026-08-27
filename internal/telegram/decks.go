@@ -136,10 +136,20 @@ func (h *Bot) deleteDeck(ctx context.Context, b *bot.Bot, chatID, userID, deckID
 		h.send(ctx, b, chatID, config.SessionExpired, nil)
 		return
 	}
+	cards, err := h.cards.ListByDeck(ctx, d.ID)
+	if err != nil {
+		slog.Error("Failed to list cards", "error", err)
+		h.send(ctx, b, chatID, config.TryAgain, nil)
+		return
+	}
 	if err := h.decks.Delete(ctx, d.ID); err != nil {
 		slog.Error("Failed to delete deck", "error", err)
 		h.send(ctx, b, chatID, config.TryAgain, nil)
 		return
+	}
+	for _, c := range cards {
+		_ = h.images.Remove(c.FrontImage)
+		_ = h.images.Remove(c.BackImage)
 	}
 	h.showDeckList(ctx, b, chatID, userID, 0)
 }

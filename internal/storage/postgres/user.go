@@ -60,24 +60,6 @@ RETURNING `+userCols, userID, limit))
 	return &u, nil
 }
 
-func (r *UserRepository) AddReview(ctx context.Context, userID int64, today time.Time) (*domain.User, error) {
-	day := domain.DayDate(today)
-	u, err := scanUser(r.pool.QueryRow(ctx, `
-UPDATE users SET
-    reviews_on_date = $2,
-    reviews_today = CASE WHEN reviews_on_date = $2 THEN reviews_today + 1 ELSE 1 END,
-    updated_at = now()
-WHERE id = $1
-RETURNING `+userCols, userID, day))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, storage.ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &u, nil
-}
-
 func (r *UserRepository) LearnDeckIDs(ctx context.Context, userID int64) ([]int64, error) {
 	rows, err := r.pool.Query(ctx, `SELECT deck_id FROM user_learn_decks WHERE user_id = $1 ORDER BY deck_id`, userID)
 	if err != nil {

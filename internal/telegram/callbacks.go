@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/drenk83/teleanki/internal/config"
 	"github.com/drenk83/teleanki/internal/domain"
+	"github.com/drenk83/teleanki/internal/learn"
 	"github.com/drenk83/teleanki/internal/scheduler"
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -123,8 +125,6 @@ func (h *Bot) onLearnCallback(ctx context.Context, b *bot.Bot, tgID, chatID, use
 		h.setLearnAllDecks(ctx, b, tgID, chatID, userID)
 	case "start":
 		h.startLearnFromSetup(ctx, b, tgID, chatID, userID)
-	case "random":
-		h.startRandomFromSetup(ctx, b, tgID, chatID, userID)
 	case "mode":
 		h.toggleLearnMode(ctx, b, tgID, chatID, userID)
 	case "page":
@@ -156,8 +156,6 @@ func (h *Bot) onDeckCallback(ctx context.Context, b *bot.Bot, tgID, chatID, user
 			return
 		}
 		h.showDeck(ctx, b, chatID, userID, id)
-	case "join":
-		h.beginJoin(ctx, b, tgID, chatID)
 	case "import":
 		h.beginJoin(ctx, b, tgID, chatID)
 	case "share":
@@ -323,42 +321,22 @@ func (h *Bot) onReviewCallback(ctx context.Context, b *bot.Bot, tgID, chatID, us
 		return
 	}
 	sess := h.sessions.get(tgID)
-	if len(parts) >= 2 && parts[1] == "stop" {
-		h.stopLearn(ctx, b, tgID, chatID, userID)
-		return
-	}
-	if sess.Learn == nil || !sess.Learn.Active() {
-		h.send(ctx, b, chatID, config.SessionExpired, nil)
-		return
-	}
+	now := time.Now()
+	rng := learn.DefaultRNG()
+	var step learnStep
 	switch parts[1] {
 	case "show":
-		h.reviewShow(ctx, b, tgID, chatID, userID)
+		step = stepLearn(sess, learnActShow, 0, 0, "", now, rng)
 	case "again":
-		if !sess.Learn.Shown {
-			return
-		}
-		h.reviewRate(ctx, b, tgID, chatID, userID, scheduler.RatingAgain)
+		step = stepLearn(sess, learnActRate, scheduler.RatingAgain, 0, "", now, rng)
 	case "hard":
-		if !sess.Learn.Shown {
-			return
-		}
-		h.reviewRate(ctx, b, tgID, chatID, userID, scheduler.RatingHard)
+		step = stepLearn(sess, learnActRate, scheduler.RatingHard, 0, "", now, rng)
 	case "good":
-		if !sess.Learn.Shown {
-			return
-		}
-		h.reviewRate(ctx, b, tgID, chatID, userID, scheduler.RatingGood)
+		step = stepLearn(sess, learnActRate, scheduler.RatingGood, 0, "", now, rng)
 	case "easy":
-		if !sess.Learn.Shown {
-			return
-		}
-		h.reviewRate(ctx, b, tgID, chatID, userID, scheduler.RatingEasy)
+		step = stepLearn(sess, learnActRate, scheduler.RatingEasy, 0, "", now, rng)
 	case "next":
-		if !sess.Learn.Infinite || !sess.Learn.Shown {
-			return
-		}
-		h.reviewNext(ctx, b, tgID, chatID, userID)
+		step = stepLearn(sess, learnActNext, 0, 0, "", now, rng)
 	case "q":
 		if len(parts) < 3 {
 			return
@@ -367,8 +345,11 @@ func (h *Bot) onReviewCallback(ctx context.Context, b *bot.Bot, tgID, chatID, us
 		if err != nil {
 			return
 		}
-		h.reviewQuizPick(ctx, b, tgID, chatID, userID, idx)
+		step = stepLearn(sess, learnActQuiz, 0, idx, "", now, rng)
+	default:
+		return
 	}
+	h.finishLearnStep(ctx, b, tgID, chatID, userID, step)
 }
 
 func (h *Bot) onCancelCallback(ctx context.Context, b *bot.Bot, tgID, chatID, userID int64) {
